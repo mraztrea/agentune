@@ -65,13 +65,27 @@ export class YouTubeProvider {
       ? videoIdOrUrl
       : `https://www.youtube.com/watch?v=${videoIdOrUrl}`;
 
-    // youtubeDl returns parsed JSON payload with dumpSingleJson
-    const info = await youtubeDl(url, {
-      dumpSingleJson: true,
-      format: 'bestaudio[ext=m4a]/bestaudio',
-      noWarnings: true,
-      callHome: false,
-    });
+    let info: unknown;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        info = await youtubeDl(url, {
+          dumpSingleJson: true,
+          format: 'bestaudio[ext=m4a]/bestaudio',
+          noWarnings: true,
+          callHome: false,
+        });
+        break;
+      } catch (error) {
+        lastError = error as Error;
+        console.error('[youtube-provider] audio extraction failed', { attempt, message: lastError.message });
+      }
+    }
+
+    if (!info) {
+      throw lastError ?? new Error('Could not extract audio stream URL');
+    }
 
     // yt-dlp puts the selected format's URL at top level when format is specified,
     // but it may also be in the formats array — use top-level .url first

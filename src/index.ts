@@ -6,19 +6,21 @@
 import { createMcpServer } from './mcp/mcp-server.js';
 import { createMpvController } from './audio/mpv-controller.js';
 import { createYoutubeProvider } from './providers/youtube-provider.js';
-import { createWebServer } from './web/web-server.js';
+import { createWebServer, getWebServer } from './web/web-server.js';
 import { createQueueManager } from './queue/queue-manager.js';
+import { createQueuePlaybackController, getQueuePlaybackController } from './queue/queue-playback-controller.js';
 
 async function main() {
   console.error('[sbotify] Starting...');
 
   // Initialize components
-  createQueueManager();
-  createYoutubeProvider();
+  const queueManager = createQueueManager();
+  const youtubeProvider = createYoutubeProvider();
 
   // Initialize audio engine — non-fatal if mpv is missing
   const mpv = createMpvController();
-  createWebServer(mpv);
+  createQueuePlaybackController(mpv, queueManager, youtubeProvider);
+  createWebServer(mpv, queueManager);
   try {
     mpv.init();
   } catch (err) {
@@ -31,8 +33,10 @@ async function main() {
 }
 
 // Graceful shutdown — destroy mpv process before exiting
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   console.error(`[sbotify] Received ${signal}, shutting down...`);
+  getQueuePlaybackController()?.clearForShutdown();
+  await getWebServer()?.destroy();
   const mpv = createMpvController();
   mpv.destroy();
   process.exit(0);

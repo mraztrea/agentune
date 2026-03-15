@@ -4,6 +4,7 @@ import { stat } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { MpvController } from '../audio/mpv-controller.js';
+import type { QueueManager } from '../queue/queue-manager.js';
 import { StateBroadcaster } from './state-broadcaster.js';
 import {
   DEFAULT_PORT,
@@ -35,8 +36,11 @@ export class WebServer {
   private dashboardOpened = false;
   private port = DEFAULT_PORT;
 
-  constructor(private readonly mpv: MpvController) {
-    this.broadcaster = new StateBroadcaster(mpv);
+  constructor(
+    private readonly mpv: MpvController,
+    queueManager: QueueManager,
+  ) {
+    this.broadcaster = new StateBroadcaster(mpv, queueManager);
     this.readyPromise = this.start();
 
     this.wsServer.on('connection', (socket) => {
@@ -77,6 +81,16 @@ export class WebServer {
 
   waitUntilReady(): Promise<void> {
     return this.readyPromise;
+  }
+
+  async destroy(): Promise<void> {
+    this.broadcaster.destroy();
+    this.wsServer.close();
+    await new Promise<void>((resolve) => {
+      this.httpServer.close(() => {
+        resolve();
+      });
+    });
   }
 
   getDashboardUrl(): string {
@@ -197,9 +211,9 @@ export class WebServer {
 
 let webServer: WebServer | null = null;
 
-export function createWebServer(mpv: MpvController): WebServer {
+export function createWebServer(mpv: MpvController, queueManager: QueueManager): WebServer {
   if (!webServer) {
-    webServer = new WebServer(mpv);
+    webServer = new WebServer(mpv, queueManager);
     void webServer.waitUntilReady().catch((error: Error) => {
       console.error('[web-server] Failed to start', { error: error.message });
     });

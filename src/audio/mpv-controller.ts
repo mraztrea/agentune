@@ -76,6 +76,7 @@ export class MpvController extends EventEmitter {
       '--no-config',
     ]);
 
+    this.attachPlayerEvents(this.player);
     this.player.volume(this.state.volume);
     this.initialized = true;
     this.emitStateChange();
@@ -202,11 +203,35 @@ export class MpvController extends EventEmitter {
       this.state.currentTrack = null;
       this.state.isPlaying = false;
       this.state.isMuted = false;
+      this.emitStateChange();
+      this.removeAllListeners();
       // Reset singleton so next createMpvController() creates fresh instance
       controller = null;
-      this.emitStateChange();
       console.error('[mpv] Destroyed');
     }
+  }
+
+  private attachPlayerEvents(player: mpvAPI): void {
+    player.on('started', () => {
+      this.state.isPlaying = true;
+      this.emitStateChange();
+    });
+    player.on('paused', () => {
+      this.state.isPlaying = false;
+      this.emitStateChange();
+      this.emit('paused');
+    });
+    player.on('resumed', () => {
+      this.state.isPlaying = true;
+      this.emitStateChange();
+      this.emit('resumed');
+    });
+    player.on('stopped', () => {
+      this.state.currentTrack = null;
+      this.state.isPlaying = false;
+      this.emitStateChange();
+      this.emit('stopped');
+    });
   }
 
   private emitStateChange(): void {

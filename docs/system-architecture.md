@@ -87,16 +87,16 @@ Tool: skip
   Input: {}
   Output: {isError: boolean, nowPlaying: Track}
 
-Tool: queue
-  Input: {videoId: string}
-  Output: {isError: boolean, queueLength: number}
+Tool: queue_add
+  Input: {query: string}
+  Output: {isError: boolean, added: Track, position: number}
 
-Tool: status
+Tool: queue_list
   Input: {}
-  Output: {isError: boolean, nowPlaying: Track, progress: number, queue: Track[]}
+  Output: {isError: boolean, nowPlaying: Track | null, queue: Track[], history: Track[]}
 
-Tool: mood
-  Input: {moodKeyword: string}
+Tool: play_mood
+  Input: {mood: string}
   Output: {isError: boolean, nowPlaying: Track}
 ```
 
@@ -192,32 +192,41 @@ MpvController.destroy()           // Graceful shutdown
 
 ### 4. Queue Manager (Phase 7)
 
-**Purpose**: Track playback state (now-playing, upcoming queue, history).
+**Purpose**: Track playback state (now-playing, upcoming queue, history) and expose queue mutations to the rest of the app.
 
 **State Structure**:
 ```typescript
 {
   nowPlaying: Track | null,
   queue: Track[],          // Next to play
-  history: Track[],        // Recently played (last 20)
-  pausedAt: number,        // Progress in seconds if paused
-  isPlaying: boolean
+  history: Track[]         // Recently played (last 20)
 }
 ```
 
 **Operations**:
 ```
 add(track)     → Push to queue
-skip()         → Pop queue[0], load in mpv
-remove(index)  → Remove from queue
+next()         → Pop queue[0]
+setNowPlaying(track)
+finishCurrentTrack() → Archive current track into history
 clear()        → Empty queue
-shuffle()      → Randomize queue
-now()          → Return nowPlaying metadata
+clearNowPlaying()
+getState()     → Snapshot for MCP + dashboard
 ```
 
 **Persistence**: Session-only (no disk storage in MVP)
 
 **Broadcast**: On state change, notify WebSocket clients (dashboard)
+
+### 4.5 Queue Playback Controller (Phase 7)
+
+**Purpose**: Keep queue transitions correct across manual play, manual skip, and natural end-of-track events.
+
+**Responsibilities**:
+- Resolve audio info through the YouTube provider
+- Set queue state before calling mpv playback
+- Mark manual skip in-flight so mpv `stopped` does not double-advance
+- Trigger dashboard auto-open once on first successful playback
 
 ### 5. Mood Presets (Phase 6)
 
@@ -249,7 +258,7 @@ getRandomMoodQuery(mood: Mood): string
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | / | Serve index.html |
-| GET | /api/status | JSON: {nowPlaying, progress, queue} |
+| GET | /api/status | JSON: {playing, title, artist, thumbnail, position, duration, volume, muted, queue, mood} |
 | POST | /api/volume | Set volume (body: {volume: 0-100}) |
 | WS | /ws | Real-time push: state updates + volume/mute commands |
 
@@ -264,12 +273,12 @@ getRandomMoodQuery(mood: Mood): string
 - Accept: `{type: "volume", level}` and `{type: "mute"}` from browser clients
 - Push current state immediately on connect
 
-**Dashboard Features** (Phase 5):
+**Dashboard Features**:
 - Now-playing title, artist, album art
 - Progress bar (display only)
 - Volume slider (0-100)
 - Mute toggle
-- Queue preview placeholder until Phase 7
+- Queue preview reflects live queue manager state
 - Mood badge reflects current track mood metadata when playback starts from `play_mood`
 - Auto-refresh on data change
 - Auto-opens in the default browser on first successful `play`
@@ -277,10 +286,10 @@ getRandomMoodQuery(mood: Mood): string
 ### Data Flow Example: "Play focus music"
 
 ```
-1. Agent sends MCP tool call: {tool: "mood", input: {moodKeyword: "focus"}}
+1. Agent sends MCP tool call: {tool: "play_mood", input: {mood: "focus"}}
    └─ MCP Server receives on stdio
 
-2. MCP Server invokes mood("focus")
+2. MCP Server invokes play_mood("focus")
    ├─ Mood Presets: getMoodQuery("focus") → "lofi hip hop beats to study to"
    └─ Invoke: search("lofi hip hop beats to study to")
 
@@ -292,7 +301,7 @@ getRandomMoodQuery(mood: Mood): string
 4. MCP Server invokes play("abc123")
    ├─ YouTube Provider: getStreamUrl("abc123")
    │  └─ Returns m3u8 URL from cache or yt-dlp
-   ├─ Queue Manager: add(track) → queue = [{...}]
+   ├─ Queue Playback Controller sets Queue Manager nowPlaying state
    ├─ mpv Controller: playback (JSON IPC)
    │  └─ Send: {command: ["loadfile", "https://stream.m3u8"]}
    └─ Return: {isError: false, nowPlaying: {title: "Lofi Beats...", ...}}
@@ -307,7 +316,7 @@ getRandomMoodQuery(mood: Mood): string
    ├─ Dashboard updates:
    │  ├─ Title: "Lofi Beats..."
    │  ├─ Progress: 0:00
-   │  └─ Queue: placeholder until Phase 7
+   │  └─ Queue: live upcoming tracks
    └─ User sees now-playing info in real-time
 ```
 
@@ -321,7 +330,7 @@ getRandomMoodQuery(mood: Mood): string
 ### Thread Safety
 - Single-threaded Node.js; async/await handles concurrency
 - Use Promises, not callback hell
-- Protect shared state (Queue) with locks if needed (Phase 7)
+- Queue mutations stay centralized in QueueManager + QueuePlaybackController to avoid drift between MCP handlers and WebSocket state
 
 ## Deployment Architecture
 

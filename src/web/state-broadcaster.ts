@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import type { TrackMeta, MpvController } from '../audio/mpv-controller.js';
+import type { QueueManager } from '../queue/queue-manager.js';
 
 export interface DashboardQueueItem {
   title: string;
@@ -38,7 +39,10 @@ export class StateBroadcaster extends EventEmitter {
   private positionTimer: NodeJS.Timeout;
   private state: DashboardState;
 
-  constructor(private readonly mpv: MpvController) {
+  constructor(
+    private readonly mpv: MpvController,
+    private readonly queueManager: QueueManager,
+  ) {
     super();
     this.state = this.createBaseState();
     this.positionTimer = setInterval(() => {
@@ -46,6 +50,9 @@ export class StateBroadcaster extends EventEmitter {
     }, 1000);
 
     this.mpv.on('state-change', () => {
+      void this.refresh();
+    });
+    this.queueManager.on('state-change', () => {
       void this.refresh();
     });
   }
@@ -80,7 +87,7 @@ export class StateBroadcaster extends EventEmitter {
       duration: 0,
       volume: this.mpv.getVolume(),
       muted: this.mpv.getIsMuted(),
-      queue: [],
+      queue: this.queueManager.list().map((item) => ({ title: item.title, artist: item.artist })),
       mood: null,
     };
   }
@@ -101,7 +108,7 @@ export class StateBroadcaster extends EventEmitter {
       duration: Math.max(position, Math.round(track.duration)),
       volume: snapshot.volume,
       muted: snapshot.isMuted,
-      queue: [],
+      queue: this.queueManager.list().map((item) => ({ title: item.title, artist: item.artist })),
       mood: track.mood,
     };
   }

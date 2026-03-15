@@ -4,7 +4,8 @@ import { getMpvController } from '../audio/mpv-controller.js';
 import type { Mood } from '../mood/mood-presets.js';
 import { getRandomMoodQuery, getMoodQueries, MOOD_VALUES, normalizeMood } from '../mood/mood-presets.js';
 import { getYoutubeProvider } from '../providers/youtube-provider.js';
-import { getWebServer } from '../web/web-server.js';
+import { getQueuePlaybackController } from '../queue/queue-playback-controller.js';
+import { getQueueManager } from '../queue/queue-manager.js';
 
 export type ToolContent = { type: "text"; text: string };
 export type ToolResult = { content: ToolContent[]; isError?: boolean };
@@ -27,29 +28,16 @@ async function playResolvedTrack(id: string, extraMeta?: { mood?: Mood }): Promi
     mood?: Mood;
   };
 }> {
+  const queuePlaybackController = getQueuePlaybackController();
+  if (!queuePlaybackController) {
+    throw new Error('Queue playback controller not initialized.');
+  }
+
   const mpv = getMpvController();
   if (!mpv || !mpv.isReady()) {
     throw new Error('Audio engine not initialized. Is mpv installed?');
   }
-
-  const yt = getYoutubeProvider();
-  if (!yt) {
-    throw new Error('YouTube provider not initialized.');
-  }
-
-  const audio = await yt.getAudioUrl(id);
-  const meta = {
-    id,
-    title: audio.title,
-    artist: audio.artist,
-    duration: audio.duration,
-    thumbnail: audio.thumbnail,
-    ...extraMeta,
-  };
-
-  mpv.play(audio.streamUrl, meta);
-  getWebServer()?.openDashboardOnce();
-
+  const meta = await queuePlaybackController.playById(id, extraMeta);
   return { meta };
 }
 
@@ -147,11 +135,18 @@ export async function handleResume(): Promise<ToolResult> {
 
 export async function handleSkip(): Promise<ToolResult> {
   try {
-    // TODO: Wire to QueueManager in Phase 7
-    const mpv = getMpvController();
-    if (!mpv || !mpv.isReady()) return errorResult('Audio engine not initialized. Is mpv installed?');
-    mpv.stop();
-    return textResult({ message: "Skipped current track. Queue not yet implemented (Phase 7)." });
+    const queuePlaybackController = getQueuePlaybackController();
+    if (!queuePlaybackController) return errorResult('Queue playback controller not initialized.');
+
+    const nextTrack = await queuePlaybackController.skip();
+    if (!nextTrack) {
+      return textResult({ nowPlaying: null, message: 'Skipped current track. Queue is now empty.' });
+    }
+
+    return textResult({
+      nowPlaying: nextTrack,
+      message: `Skipped to ${nextTrack.title} by ${nextTrack.artist}.`,
+    });
   } catch (err) {
     return errorResult(`Skip failed: ${(err as Error).message}`);
   }
@@ -159,11 +154,14 @@ export async function handleSkip(): Promise<ToolResult> {
 
 export async function handleQueueAdd(args: { query: string }): Promise<ToolResult> {
   try {
-    // TODO: Wire to QueueManager + YouTubeProvider in phases 4, 7
+    const queuePlaybackController = getQueuePlaybackController();
+    if (!queuePlaybackController) return errorResult('Queue playback controller not initialized.');
+
+    const { item, position } = await queuePlaybackController.queueByQuery(args.query);
     return textResult({
-      added: { title: `"${args.query}"`, artist: "Unknown", id: "stub-q1", duration: 195 },
-      position: 1,
-      message: `Added "${args.query}" to queue (stub).`,
+      added: item,
+      position,
+      message: `Added ${item.title} by ${item.artist} to queue.`,
     });
   } catch (err) {
     return errorResult(`Queue add failed: ${(err as Error).message}`);
@@ -172,8 +170,16 @@ export async function handleQueueAdd(args: { query: string }): Promise<ToolResul
 
 export async function handleQueueList(): Promise<ToolResult> {
   try {
-    // TODO: Wire to QueueManager in Phase 7
-    return textResult({ queue: [], message: "Queue is empty (stub)." });
+    const queueManager = getQueueManager();
+    if (!queueManager) return errorResult('Queue manager not initialized.');
+
+    const state = queueManager.getState();
+    return textResult({
+      nowPlaying: state.nowPlaying,
+      queue: state.queue,
+      history: state.history,
+      message: state.queue.length === 0 ? 'Queue is empty.' : `Queue has ${state.queue.length} track(s).`,
+    });
   } catch (err) {
     return errorResult(`Queue list failed: ${(err as Error).message}`);
   }

@@ -50,7 +50,7 @@ sbotify MCP Server (TypeScript, Node.js)
 | 4 | [YouTube Provider](phase-04-youtube-provider.md) | complete | P0 | M |
 | 5 | [Browser Dashboard](phase-05-browser-dashboard.md) | complete | P1 | M |
 | 6 | [Mood Mode](phase-06-mood-mode.md) | complete | P1 | S |
-| 7 | [Queue + Polish + Publish](phase-07-queue-polish-publish.md) | pending | P1 | M |
+| 7 | [Queue + Polish + Publish](phase-07-queue-polish-publish.md) | complete | P1 | M |
 
 ## Dependencies
 ```

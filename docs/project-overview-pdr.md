@@ -14,7 +14,7 @@ Empower developers using AI coding assistants (Claude Code, Cursor, Codex) to en
 2. **Secondary**: Open-source developers needing ambient music during long coding sessions
 3. **Tertiary**: Streaming researchers studying agent-based media control
 
-## MVP Scope (Phases 1–6)
+## MVP Scope (Phases 1–7)
 
 ### In Scope
 - Agent-driven search on YouTube (no API key required)
@@ -62,7 +62,7 @@ Empower developers using AI coding assistants (Claude Code, Cursor, Codex) to en
 1. **Agent Autonomy**: Agent initiates music without human intervention (F1–F5)
 2. **Dashboard UX**: Real-time updates on browser with < 100ms latency
 3. **Reliability**: No crashes or playback interruptions during 8-hour session
-4. **Installation**: `npm install -g sbotify && sbotify` works out-of-the-box
+4. **Installation**: package is release-prepared and locally installable once publish is approved
 5. **Cross-platform**: Same code/behavior on Windows, macOS, Linux
 
 ## Constraints & Dependencies
@@ -114,6 +114,14 @@ Empower developers using AI coding assistants (Claude Code, Cursor, Codex) to en
 - [x] Mood input is normalized case-insensitively
 - [x] Active mood appears in dashboard state
 
+### Phase 7: Queue + Polish
+- [x] `queue_add` resolves search results into real queued items
+- [x] `queue_list` returns now-playing, upcoming queue, and history
+- [x] `skip` advances to the next queued track when available
+- [x] Natural track end auto-advances through the queue
+- [x] Dashboard shows live queue updates
+- [x] Local TypeScript build + Node test suite pass
+
 ## Out-of-Scope Justification
 
 - **Spotify Integration**: Requires OAuth + paid API; YouTube is free + no keys
@@ -156,7 +164,7 @@ All without human clicking, confirmation, or intervention.
 ## Timeline
 
 - **Week 1 (P0 phases 1–4)**: Bootstrap, MCP server, mpv, YouTube (dependencies resolved)
-- **Week 2 (P1 phases 5–7)**: Dashboard complete; mood mode, queue, publish remain
+- **Week 2 (P1 phases 5–7)**: Dashboard, mood mode, and queue/polish complete; public npm publish intentionally deferred
 
 ## Review & Iteration
 

@@ -21,7 +21,8 @@ sbotify/
 │   │   ├── web-server.ts             # HTTP + WebSocket server (Phase 5)
 │   │   └── web-server-helpers.ts     # Shared web server helpers (Phase 5)
 │   ├── queue/
-│   │   └── queue-manager.ts          # Queue state management (Phase 7)
+│   │   ├── queue-manager.ts          # Queue state management (Phase 7)
+│   │   └── queue-playback-controller.ts # Queue/mpv orchestration (Phase 7)
 │   └── mood/
 │       └── mood-presets.ts           # Mood → search query mapping (Phase 6)
 ├── public/
@@ -37,19 +38,20 @@ sbotify/
 ## Module Responsibilities
 
 ### `src/index.ts` — Entry Point
-**Status**: Phase 5 UPDATE
+**Status**: Phase 7 UPDATE
 
 **Responsibility**: Bootstrap server, initialize all subsystems, handle graceful shutdown.
 
 **Key Functions**:
 - `main()`: Async entry; initializes queue, YouTube provider, mpv controller, browser dashboard, MCP server
-- `shutdown(signal)`: Handles SIGINT/SIGTERM; destroys mpv gracefully before exit
+- `shutdown(signal)`: Handles SIGINT/SIGTERM; clears queue playback orchestration, destroys web server, then destroys mpv
 - Uses `console.error()` only (never `console.log()` — corrupts MCP stdio)
 
-**Phase 5 Changes**:
-- Creates the web server with the shared mpv controller instance before MCP bootstrap
+**Phase 7 Changes**:
+- Creates the queue playback controller before MCP bootstrap so `play`, `queue_add`, and `skip` share one playback path
+- Creates the web server with both mpv and queue state
 - Keeps dashboard available even when mpv init fails
-- Still treats mpv startup as non-fatal and logs degraded-mode warnings
+- Performs async shutdown across queue controller, web server, and mpv
 
 **Shebang**: `#!/usr/bin/env node` enables direct CLI invocation
 
@@ -81,9 +83,9 @@ sbotify/
 **Return Structure**: `{content: [{type: "text", text: "..."}], isError?: boolean}` (MCP SDK standard)
 
 ### `src/mcp/tool-handlers.ts` — Tool Implementation
-**Status**: Phase 5 PARTIAL
+**Status**: Phase 7 COMPLETE
 
-**Responsibility**: Handler functions for all 10 MCP tools; wired to YouTube provider, mpv controller, and dashboard auto-open.
+**Responsibility**: Handler functions for all 10 MCP tools; wired to YouTube provider, queue playback controller, mpv controller, and dashboard auto-open.
 
 **Implementation**:
 - 10 async handler functions: `handleSearch`, `handlePlay`, `handlePlayMood`, `handlePause`, `handleResume`, `handleSkip`, `handleQueueAdd`, `handleQueueList`, `handleNowPlaying`, `handleVolume`
@@ -91,12 +93,12 @@ sbotify/
 - Helper functions: `textResult()`, `errorResult()` for response formatting
 - **Phase 5 Wiring**: Successful `play` opens the browser dashboard once per process
 - **Phase 6**: Mood handler now normalizes case-insensitive input and plays a curated random query from the selected mood pool
-- **Phase 7 TODO**: Queue operations still stubbed
+- **Phase 7**: `play`, `queue_add`, `queue_list`, and `skip` now use real queue state and playback orchestration
 
-**Design**: All handlers check `getMpvController().isReady()` before audio operations; return error if mpv unavailable
+**Design**: Playback handlers delegate to the queue playback controller; direct pause/resume/volume handlers still check `getMpvController().isReady()` before audio operations
 
 ### `src/audio/mpv-controller.ts` — Audio Engine
-**Status**: Phase 5 UPDATE
+**Status**: Phase 7 UPDATE
 
 **Responsibility**: Spawn headless mpv process via node-mpv, manage IPC communication, control audio playback, and emit dashboard-facing state changes.
 
@@ -135,10 +137,10 @@ destroy(): void                          // Graceful shutdown
 
 **Internal State**: Tracks `currentTrack`, `isPlaying`, `isMuted`, `volume` (80 default)
 
-**Error Handling**: Returns errors if not initialized; graceful mpv quit on destroy; emits `state-change` events for dashboard updates
+**Error Handling**: Returns errors if not initialized; graceful mpv quit on destroy; emits `state-change` events for dashboard updates and re-emits playback lifecycle events such as `stopped`
 
 ### `src/providers/youtube-provider.ts` — YouTube Integration
-**Status**: Phase 4 COMPLETE (95 LOC)
+**Status**: Phase 7 UPDATE
 
 **Responsibility**: Search YouTube via @distube/ytsr, extract audio streams via youtube-dl-exec (yt-dlp), format metadata.
 
@@ -176,6 +178,7 @@ export interface AudioInfo {
 - Empty query returns `[]`
 - Invalid videoId throws error
 - Missing stream URL throws error (caught by caller)
+- Retries `yt-dlp` extraction once before failing
 - Uses `console.error()` for debug logs (stdio-safe)
 
 ### `src/web/web-server.ts` — Browser Dashboard
@@ -194,10 +197,10 @@ export interface AudioInfo {
   WS /ws             → Real-time updates (subscribe)
   ```
 
-**Dashboard Features** (Phase 5):
+**Dashboard Features**:
 - Now-playing title, artist, thumbnail, progress bar
 - Volume slider + mute toggle
-- Queue placeholder until Phase 7
+- Live queue preview from queue manager state
 - Mood badge populated from current track metadata when playback starts via `play_mood`
 - Auto-update on playback state change + reconnect
 - Auto-open once on first successful play
@@ -205,7 +208,7 @@ export interface AudioInfo {
 ### `src/web/state-broadcaster.ts` — Dashboard State Sync
 **Status**: Phase 5 COMPLETE
 
-**Responsibility**: Convert mpv state changes into dashboard snapshots and throttle position refreshes to 1 second.
+**Responsibility**: Convert mpv + queue state changes into dashboard snapshots and throttle position refreshes to 1 second.
 
 ### `src/web/web-server-helpers.ts` — Web Server Helpers
 **Status**: Phase 5 COMPLETE
@@ -213,31 +216,51 @@ export interface AudioInfo {
 **Responsibility**: Shared helpers for port constants, static file resolution, MIME types, JSON responses, browser open commands, and volume-body parsing.
 
 ### `src/queue/queue-manager.ts` — Queue State
-**Status**: Phase 7 PENDING (placeholder)
+**Status**: Phase 7 COMPLETE
 
-**Responsibility**: Track current track, upcoming queue, history; manage add/remove/skip operations.
+**Responsibility**: Track now playing, upcoming queue, and playback history; emit change events for the dashboard and playback orchestration.
 
 **Data Structure**:
 ```typescript
 {
-  nowPlaying: {videoId, title, artist, duration, progress},
-  queue: Track[],           // Upcoming tracks
-  history: Track[],         // Last 20 played
-  pausedAt: number          // Progress in seconds
+  nowPlaying: QueueItem | null,
+  queue: QueueItem[],
+  history: QueueItem[]
 }
 ```
 
 **Operations**:
 ```
-• add(videoId, title): Add to queue
-• skip(): Pop nowPlaying, play next
-• remove(index): Remove from queue
+• add(item): Add to queue
+• next(): Pop next queued track
+• setNowPlaying(item): Set active track
+• finishCurrentTrack(): Archive current into history
 • clear(): Empty queue
-• shuffle(): Randomize queue
-• now(): Return nowPlaying metadata
+• clearNowPlaying(): Drop active item without archiving
+• getState(): Return immutable snapshot
 ```
 
 **Persistence**: Session-only (no disk storage in MVP)
+
+### `src/queue/queue-playback-controller.ts` — Queue Playback Orchestration
+**Status**: Phase 7 COMPLETE
+
+**Responsibility**: Centralize playback transitions so manual play, manual skip, and natural track end all use the same queue-aware path.
+
+**Key Functions**:
+```typescript
+playById(id: string, mood?: Mood): Promise<AudioInfo>
+queueByQuery(query: string): Promise<{item: QueueItem; position: number}>
+skip(): Promise<QueueItem | null>
+listQueue(): ReturnType<QueueManager["getState"]>
+clearForShutdown(): void
+```
+
+**Behavior**:
+- Resolves YouTube metadata + stream URL before handing off to mpv
+- Updates queue manager before and after playback transitions
+- Ignores duplicate `stopped` handling during manual skip
+- Opens the dashboard once on first successful playback
 
 ### `src/mood/mood-presets.ts` — Mood Keywords
 **Status**: Phase 6 COMPLETE
@@ -307,10 +330,10 @@ if (!found) return {isError: true, message: "Video not found"};
 
 ## Testing Strategy (TBD)
 
-- **Unit**: Each provider (YouTube, mpv, queue) in isolation
+- **Unit**: Queue manager + queue playback controller covered with Node test runner
 - **Integration**: MCP → YouTube → mpv → Dashboard flow
 - **E2E**: Full "play song" cycle without human intervention
-- **Target**: 80%+ coverage, P0 paths 100%
+- **Target**: 80%+ coverage, P0 paths 100%; current repo only has Phase 7 unit coverage so far
 
 ## Key Design Decisions
 

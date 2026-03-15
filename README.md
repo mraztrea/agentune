@@ -74,7 +74,8 @@ Then ask Claude Code:
 Open http://localhost:3737 in your browser to see:
 - Now-playing track (title, artist, progress)
 - Volume slider
-- Queue preview placeholder (until Phase 7)
+- Live queue preview
+- Active mood badge when playback starts from `play_mood`
 
 ## Architecture Overview
 
@@ -139,7 +140,7 @@ npm start
 | 4 | YouTube provider | ✓ Complete |
 | 5 | Browser dashboard | ✓ Complete |
 | 6 | Mood mode | ✓ Complete |
-| 7 | Queue + polish + publish | → Pending |
+| 7 | Queue + polish + release prep | ✓ Complete |
 
 See [Project Roadmap](./docs/project-roadmap.md) for detailed timelines and dependencies.
 
@@ -150,7 +151,7 @@ See [Project Roadmap](./docs/project-roadmap.md) for detailed timelines and depe
 - Audio plays **independently** (mpv headless mode)
 - **< 3 seconds** from "play" command to audio output
 - Works on **Windows, macOS, Linux**
-- **npm install -g sbotify** ready
+- **npm install -g sbotify** prepared (publish intentionally deferred)
 
 ## Contributing
 
