@@ -7,9 +7,13 @@ sbotify/
 ├── src/
 │   ├── index.ts                      # Entry point, bootstrap, graceful shutdown
 │   ├── mcp/
-│   │   └── mcp-server.ts             # MCP server + tool definitions (Phase 2)
+│   │   ├── mcp-server.ts             # MCP server + tool definitions (Phase 2)
+│   │   └── tool-handlers.ts          # Tool handler functions (Phase 2)
 │   ├── audio/
-│   │   └── mpv-controller.ts         # mpv JSON IPC wrapper (Phase 3)
+│   │   ├── mpv-controller.ts         # mpv IPC wrapper class (Phase 3) ✓
+│   │   └── platform-ipc-path.ts      # Cross-platform IPC path helper (Phase 3) ✓
+│   ├── types/
+│   │   └── node-mpv.d.ts             # Type declarations for node-mpv (Phase 3) ✓
 │   ├── providers/
 │   │   └── youtube-provider.ts       # YouTube search + stream extraction (Phase 4)
 │   ├── web/
@@ -31,18 +35,21 @@ sbotify/
 ## Module Responsibilities
 
 ### `src/index.ts` — Entry Point
-**Status**: Phase 1 COMPLETE (37 LOC)
+**Status**: Phase 3 UPDATE (47 LOC)
 
 **Responsibility**: Bootstrap server, initialize all subsystems, handle graceful shutdown.
 
 **Key Functions**:
-- `main()`: Async entry; initializes queue, YouTube provider, mpv, web server, MCP server
-- `shutdown(signal)`: Handles SIGINT/SIGTERM; cleanup and exit
+- `main()`: Async entry; initializes queue, YouTube provider, web server, **mpv audio engine**, MCP server
+- `shutdown(signal)`: Handles SIGINT/SIGTERM; destroys mpv gracefully before exit
 - Uses `console.error()` only (never `console.log()` — corrupts MCP stdio)
 
-**Shebang**: `#!/usr/bin/env node` enables direct CLI invocation
+**Phase 3 Changes**:
+- Calls `createMpvController()` and `await mpv.init()`
+- Non-fatal mpv init: Catches errors and logs warning if mpv unavailable
+- `shutdown()` calls `await mpv.destroy()` to cleanly quit mpv before exit
 
-**Error Handling**: Top-level try/catch → exit code 1
+**Shebang**: `#!/usr/bin/env node` enables direct CLI invocation
 
 ### `src/mcp/mcp-server.ts` — MCP Protocol
 **Status**: Phase 2 COMPLETE (118 LOC)
@@ -72,42 +79,58 @@ sbotify/
 **Return Structure**: `{content: [{type: "text", text: "..."}], isError?: boolean}` (MCP SDK standard)
 
 ### `src/mcp/tool-handlers.ts` — Tool Implementation
-**Status**: Phase 2 COMPLETE (122 LOC)
+**Status**: Phase 2/3 PARTIAL (115 LOC, audio wired)
 
-**Responsibility**: Handler functions for all 10 MCP tools; stub implementations wired to real services in later phases.
+**Responsibility**: Handler functions for all 10 MCP tools; wired to MpvController for audio control, stubs for search/queue.
 
 **Implementation**:
 - 10 async handler functions: `handleSearch`, `handlePlay`, `handlePlayMood`, `handlePause`, `handleResume`, `handleSkip`, `handleQueueAdd`, `handleQueueList`, `handleNowPlaying`, `handleVolume`
 - `ToolResult` type: `{content: ToolContent[], isError?: boolean}`
 - Helper functions: `textResult()`, `errorResult()` for response formatting
-- Graceful error handling with try/catch on all functions
-- Stub returns with TODO comments indicating Phase 3–4 wiring points
+- **Phase 3 Wiring**: Play, Pause, Resume, Stop → `getMpvController().{method}()`
+- **Phase 4 TODO**: Search, PlayMood wired to YouTubeProvider
+- **Phase 7 TODO**: Queue operations, Volume wired to real implementations
 
-**Design**: Functions return well-formatted JSON-wrapped responses; MCP tools invoke these handlers via Promise
+**Design**: All handlers check `getMpvController().isReady()` before audio operations; return error if mpv unavailable
 
 ### `src/audio/mpv-controller.ts` — Audio Engine
-**Status**: Phase 3 PENDING (placeholder)
+**Status**: Phase 3 COMPLETE (195 LOC)
 
-**Responsibility**: Spawn mpv process, manage JSON IPC communication, control playback.
+**Responsibility**: Spawn headless mpv process via node-mpv, manage IPC communication, control audio playback.
 
-**Design**:
-- Spawn mpv with `--input-ipc-server` flag
-- **Windows**: Named pipe `\\.\pipe\sbotify`
+**Implementation**:
+- Singleton `MpvController` class spawned with `createMpvController()`
+- Uses `node-mpv` library for abstracted IPC communication
+- **Windows**: Named pipe `\\.\pipe\sbotify-mpv`
 - **Unix**: Unix socket `/tmp/sbotify-mpv`
-- Send JSON commands: `{"command": ["set_property", "volume", 50]}`
-- Listen to property changes (duration, current-time, pause state)
-- Queue URL management (playlist)
+- Detects mpv binary availability via `which`/`where` before init
+- Non-fatal startup: Server runs even if mpv missing (tools return errors)
 
-**Commands Needed**:
-```
-• loadfile(url): Start playback
-• set_property(volume, 0–100): Volume control
-• pause: Toggle pause/play
-• playlist_remove(index): Skip track
-• property_changes: Subscribe to progress, pause events
+**Key Methods**:
+```typescript
+async init(): Promise<void>              // Spawn mpv, verify readiness
+isReady(): boolean                        // Check if initialized
+async play(url: string, meta): Promise<void>
+async pause(): Promise<void>
+async resume(): Promise<void>
+async stop(): Promise<void>
+async setVolume(level: number): Promise<number>
+async getVolume(): Promise<number>
+async getPosition(): Promise<number>     // Time position in seconds
+async getDuration(): Promise<number>
+async getCurrentTrack(): Promise<TrackMeta | null>
+async getIsPlaying(): Promise<boolean>
+async destroy(): Promise<void>           // Graceful shutdown
 ```
 
-**Error Handling**: Socket timeout → auto-restart mpv + notify agent
+**TrackMeta Type**:
+```typescript
+{id, title, artist?, duration?, thumbnail?}
+```
+
+**Internal State**: Tracks `currentTrack`, `isPlaying`, `volume` (80 default)
+
+**Error Handling**: Returns errors if not initialized; graceful mpv quit on destroy
 
 ### `src/providers/youtube-provider.ts` — YouTube Integration
 **Status**: Phase 4 PENDING (placeholder)

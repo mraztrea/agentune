@@ -12,24 +12,34 @@ import { createQueueManager } from './queue/queue-manager.js';
 async function main() {
   console.error('[sbotify] Starting...');
 
-  // Initialize components (implementations in later phases)
+  // Initialize components
   createQueueManager();
   createYoutubeProvider();
-  createMpvController();
   createWebServer();
-  await createMcpServer();
 
+  // Initialize audio engine — non-fatal if mpv is missing
+  const mpv = createMpvController();
+  try {
+    await mpv.init();
+  } catch (err) {
+    console.error('[sbotify] Audio engine unavailable:', (err as Error).message);
+    console.error('[sbotify] MCP tools will return errors until mpv is installed.');
+  }
+
+  await createMcpServer();
   console.error('[sbotify] Ready.');
 }
 
-// Graceful shutdown
-function shutdown(signal: string) {
+// Graceful shutdown — destroy mpv process before exiting
+async function shutdown(signal: string) {
   console.error(`[sbotify] Received ${signal}, shutting down...`);
+  const mpv = createMpvController();
+  await mpv.destroy();
   process.exit(0);
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
 main().catch((err) => {
   console.error('[sbotify] Fatal error:', err);

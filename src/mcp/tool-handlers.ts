@@ -1,4 +1,6 @@
-// MCP tool handler functions — stub implementations, wired to real services in phases 3-4
+// MCP tool handler functions — wired to MpvController for audio, stubs for search/queue (phases 4, 7)
+
+import { getMpvController } from '../audio/mpv-controller.js';
 
 export type ToolContent = { type: "text"; text: string };
 export type ToolResult = { content: ToolContent[]; isError?: boolean };
@@ -27,10 +29,24 @@ export async function handleSearch(args: { query: string; limit: number }): Prom
 
 export async function handlePlay(args: { id: string }): Promise<ToolResult> {
   try {
-    // TODO: Wire to MpvController + YouTubeProvider in phases 3-4
+    // TODO: Wire to YouTubeProvider for URL extraction in Phase 4
+    // For now, id is treated as a direct URL if it starts with http
+    const mpv = getMpvController();
+    if (!mpv || !mpv.isReady()) return errorResult('Audio engine not initialized. Is mpv installed?');
+
+    const isUrl = args.id.startsWith('http');
+    if (!isUrl) {
+      return textResult({
+        nowPlaying: { id: args.id, title: "Stub Track", artist: "Unknown", duration: 240 },
+        message: "Play by video ID requires YouTubeProvider (Phase 4). Pass a direct URL to test audio.",
+      });
+    }
+
+    const meta = { id: args.id, title: "Direct URL", artist: "Unknown" };
+    await mpv.play(args.id, meta);
     return textResult({
-      nowPlaying: { id: args.id, title: "Stub Track", artist: "Unknown", duration: 240 },
-      message: "Playback started (stub). Wire MpvController for real audio.",
+      nowPlaying: meta,
+      message: "Playback started.",
     });
   } catch (err) {
     return errorResult(`Play failed: ${(err as Error).message}`);
@@ -52,8 +68,10 @@ export async function handlePlayMood(args: { mood: "focus" | "energetic" | "chil
 
 export async function handlePause(): Promise<ToolResult> {
   try {
-    // TODO: Wire to MpvController in Phase 3
-    return textResult({ status: "paused", message: "Playback paused (stub)." });
+    const mpv = getMpvController();
+    if (!mpv || !mpv.isReady()) return errorResult('Audio engine not initialized. Is mpv installed?');
+    await mpv.pause();
+    return textResult({ status: "paused", message: "Playback paused." });
   } catch (err) {
     return errorResult(`Pause failed: ${(err as Error).message}`);
   }
@@ -61,8 +79,10 @@ export async function handlePause(): Promise<ToolResult> {
 
 export async function handleResume(): Promise<ToolResult> {
   try {
-    // TODO: Wire to MpvController in Phase 3
-    return textResult({ status: "playing", message: "Playback resumed (stub)." });
+    const mpv = getMpvController();
+    if (!mpv || !mpv.isReady()) return errorResult('Audio engine not initialized. Is mpv installed?');
+    await mpv.resume();
+    return textResult({ status: "playing", message: "Playback resumed." });
   } catch (err) {
     return errorResult(`Resume failed: ${(err as Error).message}`);
   }
@@ -70,8 +90,11 @@ export async function handleResume(): Promise<ToolResult> {
 
 export async function handleSkip(): Promise<ToolResult> {
   try {
-    // TODO: Wire to QueueManager + MpvController in phases 3, 7
-    return textResult({ message: "Skipped to next track (stub). Queue is empty." });
+    // TODO: Wire to QueueManager in Phase 7
+    const mpv = getMpvController();
+    if (!mpv || !mpv.isReady()) return errorResult('Audio engine not initialized. Is mpv installed?');
+    await mpv.stop();
+    return textResult({ message: "Skipped current track. Queue not yet implemented (Phase 7)." });
   } catch (err) {
     return errorResult(`Skip failed: ${(err as Error).message}`);
   }
@@ -101,8 +124,28 @@ export async function handleQueueList(): Promise<ToolResult> {
 
 export async function handleNowPlaying(): Promise<ToolResult> {
   try {
-    // TODO: Wire to MpvController + QueueManager in phases 3, 7
-    return textResult({ nowPlaying: null, message: "Nothing is currently playing (stub)." });
+    const mpv = getMpvController();
+    if (!mpv || !mpv.isReady()) return errorResult('Audio engine not initialized. Is mpv installed?');
+
+    const track = await mpv.getCurrentTrack();
+    if (!track) {
+      return textResult({ nowPlaying: null, message: "Nothing is currently playing." });
+    }
+
+    const position = await mpv.getPosition();
+    const duration = await mpv.getDuration();
+    const isPlaying = await mpv.getIsPlaying();
+    const volume = await mpv.getVolume();
+
+    return textResult({
+      nowPlaying: {
+        ...track,
+        position: Math.round(position),
+        duration: Math.round(duration),
+        isPlaying,
+        volume,
+      },
+    });
   } catch (err) {
     return errorResult(`Now playing failed: ${(err as Error).message}`);
   }
@@ -110,11 +153,15 @@ export async function handleNowPlaying(): Promise<ToolResult> {
 
 export async function handleVolume(args: { level?: number }): Promise<ToolResult> {
   try {
-    // TODO: Wire to MpvController in Phase 3
+    const mpv = getMpvController();
+    if (!mpv || !mpv.isReady()) return errorResult('Audio engine not initialized. Is mpv installed?');
+
     if (args.level !== undefined) {
-      return textResult({ volume: args.level, message: `Volume set to ${args.level}% (stub).` });
+      const actual = await mpv.setVolume(args.level);
+      return textResult({ volume: actual, message: `Volume set to ${actual}%.` });
     }
-    return textResult({ volume: 80, message: "Current volume: 80% (stub)." });
+    const current = await mpv.getVolume();
+    return textResult({ volume: current, message: `Current volume: ${current}%.` });
   } catch (err) {
     return errorResult(`Volume failed: ${(err as Error).message}`);
   }

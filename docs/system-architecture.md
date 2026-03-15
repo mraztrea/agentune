@@ -140,68 +140,52 @@ Tool: mood
 - Auto-refresh on 404 during playback
 - Key: videoId, Value: {url, expiresAt}
 
-### 3. mpv Controller (Phase 3)
+### 3. mpv Controller (Phase 3) ✓ COMPLETE
 
-**Purpose**: Spawn and control headless mpv process via JSON IPC.
+**Purpose**: Spawn and control headless mpv process via node-mpv library.
 
-**IPC Protocol**:
+**Architecture**:
+- `MpvController` singleton class manages mpv lifecycle
+- Uses `node-mpv` v1.5.0 for abstracted IPC communication (hides JSON protocol)
+- `getIpcPath()` detects platform and returns correct socket/pipe path
+- Type definitions (`node-mpv.d.ts`) for typesafe interaction
+
+**IPC Details** (via node-mpv):
 
 | OS | Socket Type | Path |
 |----|-------------|------|
-| Windows | Named Pipe | `\\.\pipe\sbotify` |
+| Windows | Named Pipe | `\\.\pipe\sbotify-mpv` |
 | macOS/Linux | Unix Socket | `/tmp/sbotify-mpv` |
 
-**Messages** (JSON format):
-
-**Client → mpv (commands)**:
-```json
-{
-  "command": ["loadfile", "https://stream-url.m3u8"],
-  "request_id": 1
-}
-
-{
-  "command": ["set_property", "volume", 50],
-  "request_id": 2
-}
-
-{
-  "command": ["set_property", "pause", false],
-  "request_id": 3
-}
-```
-
-**mpv → Client (events)**:
-```json
-{
-  "event": "property-change",
-  "name": "playback-time",
-  "value": 42.5
-}
-
-{
-  "event": "property-change",
-  "name": "duration",
-  "value": 180.0
-}
-
-{
-  "event": "end-file",
-  "reason": "eof"
-}
+**Public API**:
+```typescript
+MpvController.init()              // Start mpv process
+MpvController.isReady()           // Check if initialized
+MpvController.play(url, meta)     // Load and play
+MpvController.pause()             // Pause playback
+MpvController.resume()            // Resume playback
+MpvController.stop()              // Stop playback
+MpvController.setVolume(0-100)    // Set volume level
+MpvController.getVolume()         // Read current volume
+MpvController.getPosition()       // Playback time (seconds)
+MpvController.getDuration()       // Track duration
+MpvController.getCurrentTrack()   // Track metadata
+MpvController.getIsPlaying()      // Playback status
+MpvController.destroy()           // Graceful shutdown
 ```
 
 **Lifecycle**:
-1. Spawn mpv: `mpv --input-ipc-server={socket}`
-2. Wait for socket (timeout 2s)
-3. Load stream URL
-4. Subscribe to property changes (playback-time, duration, pause)
-5. On agent skip/stop, stop playback → load next URL
+1. Server calls `createMpvController().init()` during bootstrap
+2. Detects mpv binary via `which`/`where` (throws error if missing)
+3. Cleans up stale Unix socket from previous crashes
+4. Spawns mpv with `audio_only: true`, `idle: true`, `no-config` flags
+5. Sets volume to 80 default
+6. On shutdown, calls `destroy()` to quit mpv gracefully
 
-**Error Recovery**:
-- Socket connection fails → Retry with exponential backoff (max 3 times)
-- mpv crashes → Auto-restart; queue recovers
-- Stream load fails → Try next in queue
+**Error Handling**:
+- mpv binary not found → Caught in index.ts, non-fatal (tools return errors)
+- IPC communication failures → Propagated to tool handlers
+- Graceful destroy even if already crashed
 
 ### 4. Queue Manager (Phase 7)
 
