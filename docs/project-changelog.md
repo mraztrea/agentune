@@ -2,6 +2,19 @@
 
 ## 2026-03-15
 
+### Phase 1+: SQLite History Foundation
+- Added `src/history/history-store.ts` with `HistoryStore` class backed by better-sqlite3; singleton pattern via `createHistoryStore()` and `getHistoryStore()`
+- Added `src/history/history-schema.ts` with SQLite table definitions (tracks, plays, preferences, session_state, lastfm_cache) and `normalizeTrackId()` for consistent track dedup
+- Database location: `~/.sbotify/history.db` (configurable via `SBOTIFY_DATA_DIR` env var); auto-created on first run with WAL mode for concurrent safety
+- Added MCP tool `history` to `src/mcp/mcp-server.ts` — enables agent to query recent plays with play counts and skip rates
+- Integrated history recording into `src/queue/queue-playback-controller.ts` — `recordPlay()` called when track starts, `updatePlay()` called on finish/skip
+- Updated `src/index.ts` to initialize history store on startup (non-fatal) and close DB gracefully on shutdown
+- Added `src/history/history-store.test.ts` with unit tests for recordPlay, updatePlay, getRecent, getTrackStats
+- New dependency: better-sqlite3 v12.8.0 (+ @types/better-sqlite3 dev dependency)
+- Backward compatible with existing queue/MCP workflow; history persistence is a new feature layer
+
+## Earlier Updates (Phase 7 and prior)
+
 ### Phase 7: Queue + Polish
 - Replaced the queue placeholder with a real `QueueManager` in `src/queue/queue-manager.ts` that tracks now playing, upcoming queue, and playback history.
 - Added `src/queue/queue-playback-controller.ts` to coordinate queue advancement, manual skip, YouTube stream resolution, and mpv playback without duplicating tool logic.

@@ -9,9 +9,17 @@ import { createYoutubeProvider } from './providers/youtube-provider.js';
 import { createWebServer, getWebServer } from './web/web-server.js';
 import { createQueueManager } from './queue/queue-manager.js';
 import { createQueuePlaybackController, getQueuePlaybackController } from './queue/queue-playback-controller.js';
+import { createHistoryStore, getHistoryStore } from './history/history-store.js';
 
 async function main() {
   console.error('[sbotify] Starting...');
+
+  // Initialize history store (SQLite) — non-fatal if it fails
+  try {
+    createHistoryStore();
+  } catch (err) {
+    console.error('[sbotify] History DB unavailable:', (err as Error).message);
+  }
 
   // Initialize components
   const queueManager = createQueueManager();
@@ -36,6 +44,7 @@ async function main() {
 async function shutdown(signal: string) {
   console.error(`[sbotify] Received ${signal}, shutting down...`);
   getQueuePlaybackController()?.clearForShutdown();
+  getHistoryStore()?.close();
   await getWebServer()?.destroy();
   const mpv = createMpvController();
   mpv.destroy();

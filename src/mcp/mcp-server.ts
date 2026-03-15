@@ -15,6 +15,7 @@ import {
   handleQueueList,
   handleNowPlaying,
   handleVolume,
+  handleHistory,
 } from "./tool-handlers.js";
 
 export async function createMcpServer(): Promise<McpServer> {
@@ -27,7 +28,7 @@ export async function createMcpServer(): Promise<McpServer> {
 
   server.tool(
     "search",
-    "Search YouTube for music tracks",
+    "Search YouTube for music. Returns multiple results — pick the best match based on title/artist accuracy, prefer 'official audio' or 'topic' versions.",
     {
       query: z.string().describe("Search query for YouTube music"),
       limit: z.number().min(1).max(10).optional().default(5).describe("Max results to return (1-10)"),
@@ -104,6 +105,16 @@ export async function createMcpServer(): Promise<McpServer> {
       level: z.number().min(0).max(100).optional().describe("Volume level 0-100. Omit to get current volume."),
     },
     async (args) => handleVolume(args),
+  );
+
+  server.tool(
+    "history",
+    "View your listening history. Shows recently played tracks with play counts and skip rates. Use this to understand listening patterns before choosing what to play next.",
+    {
+      limit: z.number().min(1).max(50).optional().default(20).describe("Max results to return (1-50)"),
+      query: z.string().optional().describe("Filter by track title or artist name"),
+    },
+    async (args) => handleHistory(args),
   );
 
   // --- Connect stdio transport ---

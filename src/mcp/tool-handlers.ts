@@ -1,6 +1,7 @@
 // MCP tool handler functions — wired to MpvController for audio, stubs for search/queue (phases 4, 7)
 
 import { getMpvController } from '../audio/mpv-controller.js';
+import { getHistoryStore } from '../history/history-store.js';
 import type { Mood } from '../mood/mood-presets.js';
 import { getRandomMoodQuery, getMoodQueries, MOOD_VALUES, normalizeMood } from '../mood/mood-presets.js';
 import { getYoutubeProvider } from '../providers/youtube-provider.js';
@@ -211,6 +212,41 @@ export async function handleNowPlaying(): Promise<ToolResult> {
     });
   } catch (err) {
     return errorResult(`Now playing failed: ${(err as Error).message}`);
+  }
+}
+
+export async function handleHistory(args: { limit: number; query?: string }): Promise<ToolResult> {
+  try {
+    const store = getHistoryStore();
+    if (!store) return errorResult('History store not initialized.');
+
+    const plays = store.getRecent(args.limit, args.query);
+    if (plays.length === 0) {
+      return textResult({
+        history: [],
+        message: args.query
+          ? `No history found matching "${args.query}".`
+          : 'No listening history yet. Play some tracks first!',
+      });
+    }
+
+    const history = plays.map((p) => ({
+      title: p.title,
+      artist: p.artist,
+      playedAt: new Date(p.started_at).toISOString(),
+      playedSec: p.played_sec,
+      skipped: p.skipped === 1,
+      playCount: p.play_count,
+      ytVideoId: p.yt_video_id,
+    }));
+
+    return textResult({
+      history,
+      total: history.length,
+      message: `Showing ${history.length} recent play(s).`,
+    });
+  } catch (err) {
+    return errorResult(`History failed: ${(err as Error).message}`);
   }
 }
 

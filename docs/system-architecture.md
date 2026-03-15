@@ -64,6 +64,44 @@ sbotify is a three-tier system:
 
 ## Component Details
 
+### 0. History Store (Phase 1+)
+
+**Purpose**: Persistent SQLite-backed database for listening history, play statistics, and session state.
+
+**Implementation**:
+- `HistoryStore` class wraps `better-sqlite3` with WAL mode enabled for concurrent access
+- Database location: `~/.sbotify/history.db` (configurable via `SBOTIFY_DATA_DIR` env var)
+- Auto-creates tables on first run via schema definition
+
+**Tables**:
+```
+tracks          — Denormalized track metadata + play counts
+plays           — Individual play events (started_at, played_sec, skipped, context)
+preferences     — Key-value user preferences (weight, boredom scores)
+session_state   — Singleton row: lane, taste state, agent persona, current intent
+lastfm_cache    — External API response cache
+```
+
+**Key Methods**:
+- `recordPlay(track, context?, canonicalOverride?)` → Play ID; upserts track + inserts play event
+- `updatePlay(playId, {played_sec?, skipped?})` → Mark play as completed or skipped
+- `getRecent(limit?, query?)` → Recent plays with optional text search
+- `getTrackStats(trackId)` → Play count, avg completion rate, skip rate
+- `getTopTracks(limit?)` → Most played tracks
+- `getSessionState() / saveSessionState(state)` → Persistent session data
+- `close()` → Graceful database shutdown
+
+**Track ID Strategy**:
+- Normalized key: `normalizeTrackId(artist, title)` → `"artist::title"` (lowercase, whitespace collapsed)
+- Enables accurate dedup across multiple plays of the same song
+
+**Lifecycle**:
+1. Server calls `createHistoryStore()` during bootstrap (non-fatal if fails)
+2. DB initialized with schema on first run
+3. Play records inserted via `recordPlay()` when tracks start playing
+4. Play records updated via `updatePlay()` when tracks finish or are skipped
+5. Server calls `getHistoryStore()?.close()` during shutdown
+
 ### 1. MCP Server (Phase 2)
 
 **Purpose**: Expose sbotify capabilities as MCP tools for agent invocation.
@@ -76,11 +114,11 @@ sbotify is a three-tier system:
 **Tools**:
 ```
 Tool: search
-  Input: {query: string}
+  Input: {query: string, limit?: number}
   Output: {isError: boolean, results: SearchResult[]}
 
 Tool: play
-  Input: {videoId: string}
+  Input: {id: string}
   Output: {isError: boolean, nowPlaying: Track}
 
 Tool: skip
@@ -98,6 +136,10 @@ Tool: queue_list
 Tool: play_mood
   Input: {mood: string}
   Output: {isError: boolean, nowPlaying: Track}
+
+Tool: history
+  Input: {limit?: number (1-50, default 20), query?: string}
+  Output: {isError: boolean, history: Array<{title, artist, playedAt, playedSec, skipped, playCount, ytVideoId}>, total: number, message: string}
 ```
 
 **Transport**: stdio (STDIN for input, STDOUT for MCP responses, STDERR for debug logs)
@@ -302,6 +344,8 @@ getRandomMoodQuery(mood: Mood): string
    ├─ YouTube Provider: getStreamUrl("abc123")
    │  └─ Returns m3u8 URL from cache or yt-dlp
    ├─ Queue Playback Controller sets Queue Manager nowPlaying state
+   ├─ History Store: recordPlay({title: "Lofi Beats...", ...}, {mood: "focus"})
+   │  └─ Inserts play event into SQLite; increments track play_count
    ├─ mpv Controller: playback (JSON IPC)
    │  └─ Send: {command: ["loadfile", "https://stream.m3u8"]}
    └─ Return: {isError: false, nowPlaying: {title: "Lofi Beats...", ...}}
@@ -311,13 +355,24 @@ getRandomMoodQuery(mood: Mood): string
 
 6. mpv plays audio (headless, independent)
 
-7. Web Server publishes status via WebSocket
+7. On track finish or skip:
+   ├─ History Store: updatePlay(playId, {played_sec: 243, skipped: false})
+   │  └─ Records completion time and skip status
+   └─ Queue advances to next track (if queued)
+
+8. Web Server publishes status via WebSocket
    ├─ Browser receives: {type: "state", data: {...}}
    ├─ Dashboard updates:
    │  ├─ Title: "Lofi Beats..."
    │  ├─ Progress: 0:00
    │  └─ Queue: live upcoming tracks
    └─ User sees now-playing info in real-time
+
+9. Agent queries history:
+   ├─ Calls: {tool: "history", input: {limit: 10}}
+   ├─ History Store: getRecent(10)
+   │  └─ Returns plays with track stats (play_count, avgCompletion, skipRate)
+   └─ Agent receives: array of recent plays with metrics
 ```
 
 ## Concurrency Model

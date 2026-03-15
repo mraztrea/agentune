@@ -1,4 +1,5 @@
 import type { MpvController } from '../audio/mpv-controller.js';
+import { getHistoryStore } from '../history/history-store.js';
 import type { Mood } from '../mood/mood-presets.js';
 import type { YouTubeProvider } from '../providers/youtube-provider.js';
 import type { SearchResult } from '../providers/youtube-provider.js';
@@ -19,6 +20,7 @@ function mapSearchResultToQueueItem(result: SearchResult): QueueItem {
 export class QueuePlaybackController {
   private suppressStoppedHandler = false;
   private shuttingDown = false;
+  private currentPlayId: number | null = null;
 
   constructor(
     private readonly mpv: MpvController,
@@ -45,6 +47,20 @@ export class QueuePlaybackController {
     this.mpv.play(audio.streamUrl, queueItem);
     this.queueManager.setNowPlaying(queueItem);
     getWebServer()?.openDashboardOnce();
+
+    // Record play in history store
+    try {
+      const store = getHistoryStore();
+      if (store) {
+        this.currentPlayId = store.recordPlay(
+          { title: queueItem.title, artist: queueItem.artist, duration: queueItem.duration, thumbnail: queueItem.thumbnail, ytVideoId: id },
+          { mood: queueItem.mood, source: 'playById' },
+        );
+      }
+    } catch (err) {
+      console.error('[sbotify] Failed to record play:', (err as Error).message);
+    }
+
     return queueItem;
   }
 
@@ -60,6 +76,20 @@ export class QueuePlaybackController {
   }
 
   async skip(): Promise<QueueItem | null> {
+    // Record skip in history before stopping
+    if (this.currentPlayId !== null) {
+      try {
+        const store = getHistoryStore();
+        if (store) {
+          const position = await this.mpv.getPosition().catch(() => 0);
+          store.updatePlay(this.currentPlayId, { played_sec: Math.round(position), skipped: true });
+        }
+      } catch (err) {
+        console.error('[sbotify] Failed to record skip:', (err as Error).message);
+      }
+      this.currentPlayId = null;
+    }
+
     if (this.queueManager.getNowPlaying()) {
       this.queueManager.finishCurrentTrack();
       this.suppressStoppedHandler = true;
@@ -85,6 +115,20 @@ export class QueuePlaybackController {
     if (this.suppressStoppedHandler) {
       this.suppressStoppedHandler = false;
       return;
+    }
+
+    // Record natural finish in history — use track duration since mpv resets position on stop
+    if (this.currentPlayId !== null) {
+      try {
+        const store = getHistoryStore();
+        const nowPlaying = this.queueManager.getNowPlaying();
+        if (store && nowPlaying) {
+          store.updatePlay(this.currentPlayId, { played_sec: nowPlaying.duration, skipped: false });
+        }
+      } catch (err) {
+        console.error('[sbotify] Failed to record finish:', (err as Error).message);
+      }
+      this.currentPlayId = null;
     }
 
     this.queueManager.finishCurrentTrack();

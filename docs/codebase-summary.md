@@ -37,15 +37,76 @@ sbotify/
 
 ## Module Responsibilities
 
+### `src/history/history-store.ts` — Listening History Database
+**Status**: Phase 1+ COMPLETE
+
+**Responsibility**: SQLite-backed persistent play history store; tracks all plays, skip rates, play counts, and session state.
+
+**Implementation**:
+- `HistoryStore` class wraps better-sqlite3; creates database at `~/.sbotify/history.db` (configurable via `SBOTIFY_DATA_DIR`)
+- **Tables**: `tracks`, `plays`, `preferences`, `session_state`, `lastfm_cache` (schema auto-created on first run)
+- **WAL mode**: Enabled for concurrent read/write safety
+- Singleton pattern: `createHistoryStore()` (called on startup) + `getHistoryStore()` elsewhere
+
+**Key Methods**:
+```typescript
+recordPlay(track: TrackInput, context?, canonicalOverride?): number     // Log play with context
+updatePlay(playId: number, updates: {played_sec?, skipped?}): void     // Update skip/duration
+getRecent(limit?, query?): TrackRecord[]                                // Recent plays with search
+getTrackStats(trackId: string): {playCount, avgCompletion, skipRate}   // Play metrics
+getTopTracks(limit?): TrackRecord[]                                     // Most played tracks
+getTrackPlayCount(artist, title): number                                // Play count for track
+hoursSinceLastPlay(artist, title): number                               // For repetition penalty
+getSessionState() / saveSessionState(state: SessionState)               // Persistent session data
+close(): void                                                            // Graceful shutdown
+```
+
+**Data Structures**:
+```typescript
+interface TrackInput {
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnail: string;
+  ytVideoId: string;
+}
+
+interface TrackRecord {
+  id: string;                        // normalized "artist::title"
+  title, artist: string;
+  duration_sec, play_count: number;
+  first_played_at: number;           // timestamp
+  yt_video_id, thumbnail: string;
+}
+
+interface PlayContext {
+  mood?: string;
+  source?: string;
+  [key: string]: unknown;
+}
+```
+
+**Track ID Strategy**: `normalizeTrackId(artist, title)` returns lowercase, whitespace-collapsed `"artist::title"` for consistent dedup across plays.
+
+### `src/history/history-schema.ts` — Database Schema
+**Status**: Phase 1+ COMPLETE
+
+**Responsibility**: SQLite table definitions, indexes, and track normalization helper.
+
 ### `src/index.ts` — Entry Point
-**Status**: Phase 7 UPDATE
+**Status**: Phase 1+ UPDATE
 
 **Responsibility**: Bootstrap server, initialize all subsystems, handle graceful shutdown.
 
 **Key Functions**:
-- `main()`: Async entry; initializes queue, YouTube provider, mpv controller, browser dashboard, MCP server
-- `shutdown(signal)`: Handles SIGINT/SIGTERM; clears queue playback orchestration, destroys web server, then destroys mpv
+- `main()`: Async entry; initializes history store (SQLite), queue, YouTube provider, mpv controller, browser dashboard, MCP server
+- `shutdown(signal)`: Handles SIGINT/SIGTERM; clears queue playback orchestration, closes history DB, destroys web server, then destroys mpv
 - Uses `console.error()` only (never `console.log()` — corrupts MCP stdio)
+
+**Phase 1+ Changes**:
+- Initializes `createHistoryStore()` first (non-fatal if DB creation fails)
+- Calls `getHistoryStore()?.close()` during graceful shutdown
+- Database automatically created at `~/.sbotify/history.db` on first run
 
 **Phase 7 Changes**:
 - Creates the queue playback controller before MCP bootstrap so `play`, `queue_add`, and `skip` share one playback path
@@ -353,6 +414,7 @@ if (!found) return {isError: true, message: "Video not found"};
 | youtube-dl-exec | Stream URL extraction | 4 |
 | node-mpv | mpv JSON IPC client | 3 |
 | ws | WebSocket server | 5 |
+| better-sqlite3 | Persistent play history | 1+ |
 | zod | Schema validation | 2 |
 | typescript | Transpilation + types | All |
 

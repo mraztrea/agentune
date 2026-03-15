@@ -25,22 +25,24 @@ Phase 1 (Setup)
     └─ Required before Phase 2
 ```
 
-**Critical Path**: 1 → 2 → 3 → 4 → (5, 6, 7 in parallel)
+**Critical Path**: 1 → 1+ → 2 → 3 → 4 → (5, 6, 7 in parallel)
 **Minimum for MVP**: Phases 1–4 complete (Agent can search, play, skip)
 **P1 features**: Phases 5–7 (Dashboard, moods, queue)
+**History persistence**: Phase 1+ (SQLite-backed play tracking)
 
 ## Timeline Estimate
 
 | Phase | Duration | Status | Start | End |
 |-------|----------|--------|-------|-----|
 | 1. Setup | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
+| 1+. SQLite History | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
 | 2. MCP Server | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
 | 3. Audio Engine | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
 | 4. YouTube | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
 | 5. Dashboard | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
 | 6. Mood Mode | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
 | 7. Queue + Polish | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
-| **Total** | **~7 days** | **100%** | **Mar 15** | **Mar 15** |
+| **Total** | **~8 days** | **100%** | **Mar 15** | **Mar 15** |
 
 **Notes**:
 - Phases 1–5 complete: Agent can search/play songs and expose a live browser dashboard
@@ -48,6 +50,77 @@ Phase 1 (Setup)
 - Phase 6 completed with curated mood pools, case-insensitive mood input, and dashboard mood state
 - Phase 7 completed with real queue playback, history, auto-advance, and release-prep files
 - Public npm publish remains deferred by user request
+
+## Phase 1+: SQLite History Foundation (COMPLETE)
+
+**Status**: ✓ COMPLETE (Mar 15, post-Phase 7)
+
+**Objectives**:
+- [x] Implement SQLite-backed play history persistence
+- [x] Track plays, skip rates, play counts via better-sqlite3
+- [x] Normalize track IDs for dedup across multiple plays
+- [x] Add history MCP tool for agent queries
+- [x] Wire history recording into playback lifecycle
+
+**Deliverables**:
+- [x] `src/history/history-store.ts` — HistoryStore class + singleton pattern
+- [x] `src/history/history-schema.ts` — SQLite schema + track normalization
+- [x] Database at `~/.sbotify/history.db` (configurable via `SBOTIFY_DATA_DIR`)
+- [x] WAL mode enabled for concurrent read/write safety
+- [x] MCP tool `history` with limit/query parameters
+- [x] History recording integrated into queue playback controller
+- [x] Unit tests for store operations
+
+**Key Methods**:
+```typescript
+recordPlay(track: TrackInput, context?, canonicalOverride?): number
+updatePlay(playId: number, updates: {played_sec?, skipped?}): void
+getRecent(limit?, query?): TrackRecord[]
+getTrackStats(trackId: string): {playCount, avgCompletion, skipRate}
+getTopTracks(limit?): TrackRecord[]
+getSessionState() / saveSessionState(state): void
+close(): void
+```
+
+**Database Tables**:
+- `tracks` — Denormalized metadata + play counts (primary key: normalized "artist::title")
+- `plays` — Individual play events (timestamps, duration, skip flag, context)
+- `preferences` — User preference data
+- `session_state` — Persistent session state (singleton row)
+- `lastfm_cache` — External API response cache
+
+**Track ID Strategy**: `normalizeTrackId(artist, title)` returns `"artist::title"` (lowercase, whitespace collapsed) for consistent dedup.
+
+**Dependencies**:
+- better-sqlite3 v12.8.0
+- @types/better-sqlite3 v7.6.13 (dev)
+
+**Acceptance Criteria**:
+- [x] Database auto-creates on first run
+- [x] Play records inserted on track start
+- [x] Play records updated on track finish/skip
+- [x] History queries work with optional search filters
+- [x] Track stats computed correctly
+- [x] Graceful close on shutdown
+- [x] Unit tests pass
+- [x] No breaking changes to existing queue/MCP flow
+
+**Files Created/Modified**:
+- [x] `src/history/history-store.ts`
+- [x] `src/history/history-schema.ts`
+- [x] `src/history/history-store.test.ts`
+- [x] `src/index.ts` (init + shutdown)
+- [x] `src/mcp/mcp-server.ts` (history tool)
+- [x] `src/mcp/tool-handlers.ts` (handleHistory)
+- [x] `src/queue/queue-playback-controller.ts` (recordPlay/updatePlay calls)
+- [x] `package.json` (better-sqlite3 dep)
+
+**Testing**:
+- Unit: recordPlay, updatePlay, getRecent, getTrackStats
+- Integration: Play records inserted when track plays
+- Smoke: history tool returns recent plays
+
+---
 
 ## Phase 1: Project Setup (COMPLETE)
 
@@ -616,18 +689,19 @@ export class QueueManager {
 
 ## Progress Tracking
 
-**Last Updated**: Mar 15, 2026 (Phase 7 completion; publish deferred)
+**Last Updated**: Mar 15, 2026 (Phase 7 + Phase 1+ completion; publish deferred)
 
 | Phase | Status | % Complete | Notes |
 |-------|--------|-----------|-------|
 | 1 | ✓ COMPLETE | 100% | Project setup + initial docs |
-| 2 | ✓ COMPLETE | 100% | McpServer + 10 tool definitions |
+| 1+ | ✓ COMPLETE | 100% | SQLite history + history MCP tool |
+| 2 | ✓ COMPLETE | 100% | McpServer + 11 tool definitions |
 | 3 | ✓ COMPLETE | 100% | MpvController + cross-platform IPC |
 | 4 | ✓ COMPLETE | 100% | YouTubeProvider search() + getAudioUrl() |
 | 5 | ✓ COMPLETE | 100% | Web server + WebSocket dashboard |
 | 6 | ✓ COMPLETE | 100% | Curated mood pools + dashboard mood state |
 | 7 | ✓ COMPLETE | 100% | Queue manager + auto-advance + release prep |
-| **Overall** | **100%** | | MVP feature set complete; public publish deferred |
+| **Overall** | **100%** | | MVP + history persistence complete; public publish deferred |
 
 ---
 
