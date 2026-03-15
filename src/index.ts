@@ -20,7 +20,7 @@ async function main() {
   // Initialize audio engine — non-fatal if mpv is missing
   const mpv = createMpvController();
   try {
-    await mpv.init();
+    mpv.init();
   } catch (err) {
     console.error('[sbotify] Audio engine unavailable:', (err as Error).message);
     console.error('[sbotify] MCP tools will return errors until mpv is installed.');
@@ -31,10 +31,10 @@ async function main() {
 }
 
 // Graceful shutdown — destroy mpv process before exiting
-async function shutdown(signal: string) {
+function shutdown(signal: string) {
   console.error(`[sbotify] Received ${signal}, shutting down...`);
   const mpv = createMpvController();
-  await mpv.destroy();
+  mpv.destroy();
   process.exit(0);
 }
 

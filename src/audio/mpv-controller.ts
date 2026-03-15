@@ -1,5 +1,5 @@
 // mpv IPC wrapper — controls headless mpv for audio playback
-// Uses node-mpv for abstracted IPC communication with mpv process
+// Uses node-mpv v1.5 which spawns mpv in constructor; methods are sync socket commands
 
 import mpvAPI from 'node-mpv';
 import { execSync } from 'child_process';
@@ -40,7 +40,8 @@ export class MpvController {
   };
   private initialized = false;
 
-  async init(): Promise<void> {
+  // node-mpv v1.5 spawns mpv in constructor — no start() method
+  init(): void {
     if (this.initialized) return;
 
     if (!isMpvInstalled()) {
@@ -58,6 +59,7 @@ export class MpvController {
       try { unlinkSync(ipcPath); } catch { /* no stale socket */ }
     }
 
+    // mpv process spawns here in the constructor
     this.player = new mpvAPI({
       audio_only: true,
       auto_restart: true,
@@ -69,22 +71,15 @@ export class MpvController {
       '--no-config',
     ]);
 
-    try {
-      await this.player.start();
-      await this.player.volume(this.state.volume);
-      this.initialized = true;
-      console.error('[mpv] Ready — headless audio engine started');
-    } catch (err) {
-      this.player = null;
-      throw new Error(`mpv failed to start: ${(err as Error).message}`);
-    }
+    this.player.volume(this.state.volume);
+    this.initialized = true;
+    console.error('[mpv] Ready — headless audio engine started');
   }
 
   isReady(): boolean {
     return this.initialized && this.player !== null;
   }
 
-  // Ensure mpv is initialized before any operation
   private ensureReady(): mpvAPI {
     if (!this.player || !this.initialized) {
       throw new Error('mpv not initialized — call init() first');
@@ -92,54 +87,54 @@ export class MpvController {
     return this.player;
   }
 
-  async play(url: string, meta: TrackMeta): Promise<void> {
+  play(url: string, meta: TrackMeta): void {
     const player = this.ensureReady();
-    await player.load(url);
+    player.load(url);
     this.state.currentTrack = meta;
     this.state.isPlaying = true;
     console.error('[mpv] Playing:', meta.title);
   }
 
-  async pause(): Promise<void> {
+  pause(): void {
     const player = this.ensureReady();
-    await player.pause();
+    player.pause();
     this.state.isPlaying = false;
     console.error('[mpv] Paused');
   }
 
-  async resume(): Promise<void> {
+  resume(): void {
     const player = this.ensureReady();
-    await player.resume();
+    player.resume();
     this.state.isPlaying = true;
     console.error('[mpv] Resumed');
   }
 
-  async stop(): Promise<void> {
+  stop(): void {
     const player = this.ensureReady();
-    await player.stop();
+    player.stop();
     this.state.currentTrack = null;
     this.state.isPlaying = false;
     console.error('[mpv] Stopped');
   }
 
-  async setVolume(level: number): Promise<number> {
+  setVolume(level: number): number {
     const player = this.ensureReady();
     const clamped = Math.max(0, Math.min(100, level));
-    await player.volume(clamped);
+    player.volume(clamped);
     this.state.volume = clamped;
     console.error('[mpv] Volume set to:', clamped);
     return clamped;
   }
 
-  async getVolume(): Promise<number> {
+  getVolume(): number {
     return this.state.volume;
   }
 
   async getPosition(): Promise<number> {
     const player = this.ensureReady();
     try {
-      const pos = await player.getTimePosition();
-      return pos ?? 0;
+      const pos = await player.getProperty('time-pos');
+      return (pos as number) ?? 0;
     } catch {
       return 0;
     }
@@ -148,25 +143,25 @@ export class MpvController {
   async getDuration(): Promise<number> {
     const player = this.ensureReady();
     try {
-      const dur = await player.getDuration();
-      return dur ?? 0;
+      const dur = await player.getProperty('duration');
+      return (dur as number) ?? 0;
     } catch {
       return 0;
     }
   }
 
-  async getCurrentTrack(): Promise<TrackMeta | null> {
+  getCurrentTrack(): TrackMeta | null {
     return this.state.currentTrack;
   }
 
-  async getIsPlaying(): Promise<boolean> {
+  getIsPlaying(): boolean {
     return this.state.isPlaying;
   }
 
-  async destroy(): Promise<void> {
+  destroy(): void {
     if (this.player) {
       try {
-        await this.player.quit();
+        this.player.quit();
       } catch {
         // mpv may already be gone
       }

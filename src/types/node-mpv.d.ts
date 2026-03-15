@@ -1,4 +1,5 @@
-// Type declarations for node-mpv (no @types package available)
+// Type declarations for node-mpv v1.5.0 (no @types package available)
+// v1.5 spawns mpv in constructor; methods are sync socket commands (fire-and-forget)
 
 declare module 'node-mpv' {
   interface MpvOptions {
@@ -13,26 +14,30 @@ declare module 'node-mpv' {
 
   class MPV {
     constructor(options?: MpvOptions, mpvArgs?: string[]);
-    start(): Promise<void>;
-    quit(): Promise<void>;
-    load(uri: string, mode?: string): Promise<void>;
-    play(): Promise<void>;
-    pause(): Promise<void>;
-    resume(): Promise<void>;
-    stop(): Promise<void>;
-    volume(level: number): Promise<void>;
-    adjustVolume(delta: number): Promise<void>;
-    mute(): Promise<void>;
-    unmute(): Promise<void>;
-    seek(seconds: number): Promise<void>;
-    getTimePosition(): Promise<number | null>;
-    getDuration(): Promise<number | null>;
-    isPaused(): Promise<boolean>;
-    isMuted(): Promise<boolean>;
-    isSeekable(): Promise<boolean>;
-    observeProperty(name: string, id?: number): Promise<void>;
+
+    // Playback — sync socket commands, no return value
+    load(uri: string, mode?: string, options?: string[]): void;
+    pause(): void;
+    resume(): void;
+    stop(): void;
+    quit(): void;
+
+    // Volume — sync socket commands
+    volume(level: number): void;
+    adjustVolume(delta: number): void;
+    mute(): void;
+    unmute(): void;
+
+    // Seeking
+    seek(seconds: number): void;
+    goToPosition(seconds: number): void;
+
+    // Properties — getProperty returns a Promise
     getProperty(name: string): Promise<unknown>;
-    setProperty(name: string, value: unknown): Promise<void>;
+    setProperty(name: string, value: unknown): void;
+    observeProperty(name: string, id?: number): void;
+
+    // Events
     on(event: string, callback: (...args: unknown[]) => void): void;
   }
 
