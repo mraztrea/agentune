@@ -17,7 +17,7 @@ async function main() {
   createYoutubeProvider();
   createMpvController();
   createWebServer();
-  createMcpServer();
+  await createMcpServer();
 
   console.error('[sbotify] Ready.');
 }
