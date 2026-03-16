@@ -44,13 +44,13 @@ sbotify/
 ## Module Responsibilities
 
 ### `src/history/history-store.ts` — Listening History Database
-**Status**: Phase 1+ COMPLETE
+**Status**: Phase 1+ COMPLETE (Updated Phase 1)
 
 **Responsibility**: SQLite-backed persistent play history store; tracks all plays, skip rates, play counts, and session state.
 
 **Implementation**:
 - `HistoryStore` class wraps better-sqlite3; creates database at `~/.sbotify/history.db` (configurable via `SBOTIFY_DATA_DIR`)
-- **Tables**: `tracks`, `plays`, `preferences`, `session_state`, `lastfm_cache` (schema auto-created on first run)
+- **Tables**: `tracks`, `plays`, `preferences`, `session_state`, `provider_cache` (renamed from `lastfm_cache`; schema auto-created on first run)
 - **WAL mode**: Enabled for concurrent read/write safety
 - Singleton pattern: `createHistoryStore()` (called on startup) + `getHistoryStore()` elsewhere
 
@@ -65,7 +65,7 @@ getTrackPlayCount(artist, title): number                                // Play 
 hoursSinceLastPlay(artist, title): number                               // For repetition penalty
 getSessionState() / saveSessionState(state: SessionState)               // Persistent session data
 getDatabase(): Database.Database                                         // Direct DB access for providers
-updateTrackTags(trackId: string, tags: string[]): void                 // Update Last.fm tags for track
+updateTrackTags(trackId: string, tags: string[]): void                 // Update provider-enriched tags for track
 close(): void                                                            // Graceful shutdown
 ```
 
@@ -88,7 +88,7 @@ interface TrackRecord {
 }
 
 interface PlayContext {
-  mood?: string;
+  context?: string;
   source?: string;
   [key: string]: unknown;
 }
@@ -102,12 +102,12 @@ interface PlayContext {
 **Responsibility**: SQLite table definitions, indexes, and track normalization helper.
 
 ### `src/index.ts` — Entry Point
-**Status**: Phase 3 UPDATE COMPLETE
+**Status**: Phase 3 UPDATE COMPLETE (Updated Phase 1)
 
 **Responsibility**: Bootstrap server, initialize all subsystems, handle graceful shutdown.
 
 **Key Functions**:
-- `main()`: Async entry; initializes history store (SQLite), optional Last.fm provider (gated by LASTFM_API_KEY env var), queue, YouTube provider, mpv controller, browser dashboard, MCP server
+- `main()`: Async entry; initializes history store (SQLite), discovery providers (Apple + Smart Search), queue, YouTube provider, mpv controller, browser dashboard, MCP server
 - `shutdown(signal)`: Handles SIGINT/SIGTERM; clears queue playback orchestration, closes history DB, destroys web server, then destroys mpv
 - Uses `console.error()` only (never `console.log()` — corrupts MCP stdio)
 
@@ -116,12 +116,13 @@ interface PlayContext {
 - Calls `getHistoryStore()?.close()` during graceful shutdown
 - Database automatically created at `~/.sbotify/history.db` on first run
 
-**Phase 3 Changes**:
-- Initializes `createLastFmProvider(apiKey, db)` if `LASTFM_API_KEY` env var is set (non-fatal if missing)
-- Last.fm provider optional; queue playback controller gracefully handles missing provider
+**Phase 1 Changes** (Discovery Providers):
+- Initializes `createAppleSearchProvider(db)` and `createSmartSearchProvider(youtubeProvider, db)` without environment variable gating
+- Both providers are zero-config; no API keys required
+- Graceful: app runs without providers if initialization fails
 
 **Phase 7 Changes**:
-- Creates the queue playback controller before MCP bootstrap so `play`, `queue_add`, and `skip` share one playback path
+- Creates the queue playback controller before MCP bootstrap so `play_song`, `add_song`, and `skip` share one playback path
 - Creates the web server with both mpv and queue state
 - Keeps dashboard available even when mpv init fails
 - Performs async shutdown across queue controller, web server, and mpv
@@ -129,31 +130,30 @@ interface PlayContext {
 **Shebang**: `#!/usr/bin/env node` enables direct CLI invocation
 
 ### `src/mcp/mcp-server.ts` — MCP Protocol
-**Status**: Phase 2+ COMPLETE (expanded to 11 tools)
+**Status**: Phase 2+ COMPLETE (expanded discovery + queue-first playback)
 
 **Responsibility**: Initialize McpServer, register MCP tool schemas, handle agent requests via stdio.
 
 **Implementation**:
 - `createMcpServer()`: Async entry; initializes McpServer instance
-- Registers tools with Zod schemas: search, play, play_song, discover, pause, resume, skip, queue_add, queue_list, now_playing, volume, get_session_state
+- Registers tools with Zod schemas: play_song, add_song, discover, pause, resume, skip, queue_list, now_playing, volume, history, get_session_state
 - StdioServerTransport for agent communication
 - **Phase 5**: New `discover` tool uses 4-lane candidate generation + 8-term scoring
 - **Phase 5**: New `get_session_state` tool returns taste profile, agent persona, session lane context
 
-**Tool Definitions** (Phase 5 current):
+**Tool Definitions** (current):
 ```
-• search(query, limit?) → {results: [], message: string}
-• play(id) → {nowPlaying: {id, title, artist, duration}, message: string}
-• play_song(title, artist?) → {matched, nowPlaying, matchScore, alternatives}
-• discover(mode?, intent?) → {candidates: ScoredCandidate[], modeUsed: string}
+• play_song(title, artist?) → {matched, action: "replaced_current", nowPlaying, matchScore, alternatives}
+• add_song(title, artist?) → {matched, action: "queued", queuePosition, startedPlayback, added, alternatives}
+• discover(mode?, intent?) → {suggestions: ScoredCandidate[], mode: string}
 • pause() → {status: "paused", message: string}
 • resume() → {status: "playing", message: string}
-• skip() → {message: string}
-• queue_add(query?, id?) → {added: Track, position: number}
-• queue_list() → {queue: Track[]}
+• skip() → {nowPlaying: Track | null, message: string}
+• queue_list() → {nowPlaying: Track | null, queue: Track[], history: Track[]}
 • now_playing() → {nowPlaying: Track | null}
 • volume(level?) → {volume: number}
-• get_session_state() → {taste, persona, sessionLane, recentPlays}
+• history(limit?, query?) → {history: PlayRecord[], total: number}
+• get_session_state() → {taste, persona, lane, recent}
 ```
 
 **Return Structure**: `{content: [{type: "text", text: "..."}], isError?: boolean}` (MCP SDK standard)
@@ -161,20 +161,18 @@ interface PlayContext {
 ### `src/mcp/tool-handlers.ts` — Tool Implementation
 **Status**: Phase 2+ COMPLETE
 
-**Responsibility**: Handler functions for all 11 MCP tools; wired to YouTube provider, queue playback controller, mpv controller, and dashboard auto-open.
+**Responsibility**: Handler functions for the public MCP tools; wired to Apple-first song resolution, queue playback controller, mpv controller, and dashboard auto-open.
 
 **Implementation**:
-- 11 async handler functions: `handleSearch`, `handlePlay`, `handlePlaySong`, `handlePlayMood`, `handlePause`, `handleResume`, `handleSkip`, `handleQueueAdd`, `handleQueueList`, `handleNowPlaying`, `handleVolume`
+- Public handlers include `handlePlaySong`, `handleAddSong`, `handleDiscover`, `handlePause`, `handleResume`, `handleSkip`, `handleQueueList`, `handleNowPlaying`, `handleVolume`, `handleHistory`, `handleGetSessionState`
 - `ToolResult` type: `{content: ToolContent[], isError?: boolean}`
 - Helper functions: `textResult()`, `errorResult()` for response formatting
-- **Phase 2**: New `handlePlaySong(title, artist?)` uses search-result-scorer to find best YouTube match
-  - Searches with primary query: `"{artist} - {title} official audio"` (with 10-result limit)
-  - Falls back to `"{artist} {title}"` if top score < 0.2 minimum
-  - Returns scored match with alternatives or structured no-match response
-  - Uses canonical artist/title overrides to accurate history recording
-- **Phase 5 Wiring**: Successful `play` opens the browser dashboard once per process
+- `handlePlaySong(title, artist?)` canonicalizes via Apple Search, resolves a playable YouTube match, and replaces the current song immediately
+- `handleAddSong(title, artist?)` canonicalizes via Apple Search, queues the track, and auto-starts queue playback if currently idle
+- `handleDiscover()` returns suggestions with both `add_song(...)` and `play_song(...)` hints
+- Successful playback opens the browser dashboard once per process
 - **Phase 6**: Mood handler now normalizes case-insensitive input and plays a curated random query from the selected mood pool
-- **Phase 7**: `play`, `queue_add`, `queue_list`, and `skip` now use real queue state and playback orchestration
+- **Phase 7**: `play_song`, `add_song`, `queue_list`, and `skip` now use real queue state and playback orchestration
 
 **Design**: Playback handlers delegate to the queue playback controller; direct pause/resume/volume handlers still check `getMpvController().isReady()` before audio operations
 
@@ -244,30 +242,72 @@ export interface ScoredResult {
 }
 ```
 
-### `src/providers/lastfm-provider.ts` — Last.fm Discovery API
-**Status**: Phase 3 UPDATE COMPLETE
+### `src/providers/apple-search-provider.ts` — Apple iTunes Search API
+**Status**: Phase 1 COMPLETE
 
-**Responsibility**: Query Last.fm API for music discovery (similar artists, tracks, tags) with 7-day SQLite cache.
+**Responsibility**: Query Apple iTunes Search API for track metadata, genre information, and catalog search with 7-day SQLite cache. Zero API keys required.
 
 **Implementation**:
-- `LastFmProvider` class wraps Last.fm API; caches responses in `lastfm_cache` table
+- `AppleSearchProvider` class wraps Apple iTunes Search API
 - 4 core async methods with cache-first retrieval:
-  - `getSimilarArtists(artist, limit?)`: Fetch artist recommendations
-  - `getSimilarTracks(artist, track, limit?)`: Fetch similar track recommendations
-  - `getTopTags(artist, track?)`: Fetch tags for artist or track
-  - `getTopTracksByTag(tag, limit?)`: Fetch top tracks in a genre/tag
-- Cache eviction: 7-day TTL; expired rows deleted on startup
-- YouTube metadata normalization: `normalizeForQuery()` strips official/lyric/live/ft. suffixes before querying
-- Singleton pattern: `createLastFmProvider(apiKey, db)` + `getLastFmProvider()`
-- Non-fatal: returns empty arrays if API call fails or times out (5s timeout)
+  - `searchTracks(query, limit?)`: Search iTunes catalog for tracks
+  - `getArtistTracks(artist, limit?)`: Fetch all tracks by a specific artist
+  - `getTrackGenre(artist, title)`: Fetch primary genre for a track
+  - `searchByGenre(genre, limit?)`: Get tracks matching a genre term
+- Cache eviction: 7-day TTL; expired rows deleted on startup (stored in `provider_cache` table)
+- HTTPS only, 5s timeout per request
+- Singleton pattern: `createAppleSearchProvider(db)` + `getAppleSearchProvider()`
+- Non-fatal: returns empty arrays if API call fails or times out
 
 **Key Types**:
 ```typescript
-export interface SimilarArtist { name: string; match: number }  // 0-1 score
-export interface SimilarTrack { title: string; artist: string; match: number }
-export interface Tag { name: string; count: number }
-export interface TagTrack { title: string; artist: string }
+export interface AppleTrack {
+  title: string;
+  artist: string;
+  album: string;
+  genre: string;
+  durationMs: number;
+  artwork: string;
+}
 ```
+
+### `src/providers/smart-search-provider.ts` — Smart Search Discovery via ytsr
+**Status**: Phase 1 COMPLETE
+
+**Responsibility**: Intelligent YouTube search-based music discovery using crafted queries for related tracks, mood discovery, and artist suggestions. Zero API keys required.
+
+**Implementation**:
+- `SmartSearchProvider` class wraps existing `@distube/ytsr` for intelligent query construction
+- 3 core async methods:
+  - `getRelatedTracks(artist, title, limit?)`: Related via smart queries like "{artist} similar songs", "songs like {title}"
+  - `searchByMood(mood, limit?)`: Mood-based discovery via "{mood} music", "{mood} songs"
+  - `getArtistSuggestions(artist, limit?)`: Similar artists via "artists like {artist}", "{artist} related"
+- Deduplicates results by videoId; excludes current track automatically
+- Cache layer (3-day TTL): queries cached in `provider_cache` table with "smart:" prefix
+- Non-fatal: returns empty arrays if search fails
+
+**Key Types**:
+```typescript
+export interface SmartTrack {
+  title: string;
+  artist: string;
+  source: string;        // query that found this track
+  videoId: string;       // YouTube video ID for direct play
+}
+```
+
+### `src/providers/metadata-normalizer.ts` — Query Normalization Utility
+**Status**: Phase 1 COMPLETE
+
+**Responsibility**: Shared utility for cleaning YouTube metadata before API queries. Removes quality suffixes and standardizes search terms.
+
+**Implementation**:
+- `normalizeForQuery(text: string): string` — Removes:
+  - Quality suffixes: "(Official Audio)", "[HD]", "(lyrics)", "[live]", etc.
+  - Featured artist markers: "(feat. X)", "[ft. Y]"
+  - Channel suffixes: "- Topic", "VEVO"
+  - Whitespace normalization
+- Used by both AppleSearchProvider and SmartSearchProvider for cache key generation
 
 ### `src/providers/youtube-provider.ts` — YouTube Integration
 **Status**: Phase 7 UPDATE
@@ -373,9 +413,9 @@ export interface AudioInfo {
 **Persistence**: Session-only (no disk storage in MVP)
 
 ### `src/queue/queue-playback-controller.ts` — Queue Playback Orchestration
-**Status**: Phase 3 UPDATE COMPLETE
+**Status**: Phase 3 UPDATE COMPLETE (Updated Phase 1)
 
-**Responsibility**: Centralize playback transitions so manual play, manual skip, and natural track end all use the same queue-aware path. Async tag enrichment from Last.fm on every play (fire-and-forget).
+**Responsibility**: Centralize playback transitions so manual play, manual skip, and natural track end all use the same queue-aware path. Async tag enrichment from Apple on every play (fire-and-forget).
 
 **Key Functions**:
 ```typescript
@@ -391,21 +431,22 @@ clearForShutdown(): void
 - Updates queue manager before and after playback transitions
 - Ignores duplicate `stopped` handling during manual skip
 - Opens the dashboard once on first successful playback
-- **Phase 3 Update**: On every track play, asynchronously enriches track record with Last.fm tags (fire-and-forget, does not block playback)
-  - Fetches `getTopTags(artist, track)` from Last.fm provider
-  - Stores tags in track record via `updateTrackTags(trackId, tagNames)`
+- **Phase 1 Update**: On every track play, asynchronously enriches track record with Apple genre tags (fire-and-forget, does not block playback)
+  - Fetches `getTrackGenre(artist, title)` from AppleSearchProvider
+  - Appends synthetic tags from discovery query context (e.g., "chill", "lo-fi" if discovered via mood search)
+  - Stores all tags in track record via `updateTrackTags(trackId, tagNames)`
   - Non-blocking: tag fetch happens after playback starts
 
 ### `src/taste/candidate-generator.ts` — 4-Lane Discovery
-**Status**: Phase 5 COMPLETE
+**Status**: Phase 5 COMPLETE (Updated Phase 1)
 
 **Responsibility**: Generate track candidates from 4 independent lanes (continuation, comfort, context-fit, wildcard) based on taste context and music intent.
 
 **Lanes**:
-- **Continuation**: Similar tracks from Last.fm (current track context)
+- **Continuation**: Similar tracks from SmartSearchProvider (current track context)
 - **Comfort**: Most-played tracks from history
-- **Context-fit**: Tracks matching intent tags or session lane tags
-- **Wildcard**: Exploration via similar artists
+- **Context-fit**: Tracks matching intent tags or session lane tags via SmartSearchProvider or AppleSearchProvider
+- **Wildcard**: Exploration via SmartSearchProvider artist suggestions
 
 **Discovery Modes**: focus (50% continuation, 30% comfort), balanced (40/30/20/10), explore (20/15/30/35)
 
@@ -413,6 +454,11 @@ clearForShutdown(): void
 ```typescript
 async generate(currentTrack?, intent?, mode = 'balanced'): Promise<Candidate[]>
 ```
+
+**Provider Integration**:
+- Lane A (continuation): `smartSearch.getRelatedTracks(artist, title)`
+- Lane C (context-fit): `smartSearch.searchByMood(tag)` with `apple.searchByGenre(tag)` fallback
+- Lane D (wildcard): `smartSearch.getArtistSuggestions(artist)` → smart search for suggested artist tracks
 
 ### `src/taste/candidate-scorer.ts` — 8-Term Scoring
 **Status**: Phase 5 COMPLETE

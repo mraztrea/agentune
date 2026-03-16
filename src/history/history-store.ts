@@ -274,7 +274,7 @@ export class HistoryStore {
     `).run(key, weight, boredom, Date.now());
   }
 
-  /** Expose underlying database for cache access (Last.fm provider). */
+  /** Expose underlying database for cache access (discovery providers). */
   getDatabase(): Database.Database {
     return this.db;
   }

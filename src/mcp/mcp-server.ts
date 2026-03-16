@@ -4,14 +4,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
-  handleSearch,
-  handlePlay,
+  handleAddSong,
   handlePlaySong,
   handleDiscover,
   handlePause,
   handleResume,
   handleSkip,
-  handleQueueAdd,
   handleQueueList,
   handleNowPlaying,
   handleVolume,
@@ -28,29 +26,10 @@ export async function createMcpServer(): Promise<McpServer> {
   // --- Tool Registrations ---
 
   server.tool(
-    "search",
-    "Search YouTube for music. Returns multiple results — pick the best match based on title/artist accuracy, prefer 'official audio' or 'topic' versions.",
-    {
-      query: z.string().describe("Search query for YouTube music"),
-      limit: z.number().min(1).max(10).optional().default(10).describe("Max results to return (1-10)"),
-    },
-    async (args) => handleSearch(args),
-  );
-
-  server.tool(
-    "play",
-    "Play a specific track by its video ID",
-    {
-      id: z.string().describe("YouTube video ID to play"),
-    },
-    async (args) => handlePlay(args),
-  );
-
-  server.tool(
     "play_song",
-    "Play a specific song by title and artist. Resolves to the best YouTube version automatically. " +
-    "Always include artist for accuracy. " +
-    "The resolver validates title/artist match and prefers official audio versions.",
+    "Play a specific song immediately using title and artist. " +
+    "Apple Search API is used first to clean up the canonical song identity, then YouTube resolves a playable version. " +
+    "This replaces the current song right away.",
     {
       title: z.string().min(1).describe("Song title"),
       artist: z.string().optional().describe("Artist name — strongly recommended for accuracy"),
@@ -59,11 +38,23 @@ export async function createMcpServer(): Promise<McpServer> {
   );
 
   server.tool(
+    "add_song",
+    "Add a specific song to the queue using title and artist. " +
+    "Apple Search API is used first to clean up the canonical song identity, then YouTube is used only to resolve a playable version. " +
+    "If nothing is currently playing, the queued song starts automatically.",
+    {
+      title: z.string().min(1).describe("Song title"),
+      artist: z.string().optional().describe("Artist name — strongly recommended for accuracy"),
+    },
+    async (args) => handleAddSong(args),
+  );
+
+  server.tool(
     "discover",
     "Get intelligent song suggestions based on your taste and current session. " +
     "Call get_session_state() first to understand your taste, then optionally pass a music intent. " +
     "Returns scored candidates from 4 sources: continuation, comfort, context-fit, wildcard. " +
-    "Pick from suggestions and use play_song() to play your choice.",
+    "Pick from suggestions and use add_song() to queue one, or play_song() to replace the current track.",
     {
       mode: z.enum(["focus", "balanced", "explore"]).optional().default("balanced")
         .describe("focus=predictable, balanced=default, explore=adventurous"),
@@ -100,18 +91,8 @@ export async function createMcpServer(): Promise<McpServer> {
   );
 
   server.tool(
-    "queue_add",
-    "Add a track to the play queue. Provide either a search query or a video ID.",
-    {
-      query: z.string().optional().describe("Search query to find and queue a track"),
-      id: z.string().optional().describe("YouTube video ID to queue directly"),
-    },
-    async (args) => handleQueueAdd(args),
-  );
-
-  server.tool(
     "queue_list",
-    "List all tracks currently in the play queue",
+    "List all tracks currently in the play queue and the current now-playing track",
     {},
     async () => handleQueueList(),
   );

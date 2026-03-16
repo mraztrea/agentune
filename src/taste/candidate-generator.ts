@@ -1,9 +1,10 @@
 // 4-lane candidate generation for discover pipeline
-// Lanes: continuation (similar tracks), comfort (top played), context-fit (tag match), wildcard (explore)
+// Apple Search API is the primary catalog backbone; Smart Search is query-expansion fallback only.
 
-import type { LastFmProvider } from '../providers/lastfm-provider.js';
+import type { SmartSearchProvider } from '../providers/smart-search-provider.js';
+import type { AppleSearchProvider } from '../providers/apple-search-provider.js';
 import type { HistoryStore } from '../history/history-store.js';
-import type { TasteEngine, TrackInfo, SessionLane } from './taste-engine.js';
+import type { TasteEngine, TrackInfo } from './taste-engine.js';
 
 export interface MusicIntent {
   energy?: number;       // 0=calm, 1=energetic
@@ -31,7 +32,8 @@ export type DiscoverMode = keyof typeof LANE_RATIOS;
 
 export class CandidateGenerator {
   constructor(
-    private readonly lastFm: LastFmProvider | null,
+    private readonly smartSearch: SmartSearchProvider | null,
+    private readonly apple: AppleSearchProvider | null,
     private readonly historyStore: HistoryStore,
     private readonly tasteEngine: TasteEngine,
   ) {}
@@ -42,16 +44,24 @@ export class CandidateGenerator {
     mode: DiscoverMode = 'balanced',
   ): Promise<Candidate[]> {
     const candidates: Candidate[] = [];
+    const topPlayed = this.historyStore.getTopTracks(6);
+    const sessionLane = this.tasteEngine.getSessionLane();
 
-    // Lane A: Continuation — similar tracks from current track via Last.fm
-    if (currentTrack && this.lastFm) {
+    // Lane A: Continuation — Apple artist catalog first, Smart Search as fallback
+    if (currentTrack && this.apple) {
       try {
-        const similar = await this.lastFm.getSimilarTracks(currentTrack.artist, currentTrack.title, 8);
-        for (const s of similar) {
+        const artistTracks = await this.apple.getArtistTracks(currentTrack.artist, 8);
+        for (const track of artistTracks) {
+          if (
+            track.artist.toLowerCase() === currentTrack.artist.toLowerCase() &&
+            track.title.toLowerCase() === currentTrack.title.toLowerCase()
+          ) {
+            continue;
+          }
           candidates.push({
-            title: s.title, artist: s.artist,
+            title: track.title, artist: track.artist,
             source: 'continuation',
-            sourceDetail: `similar to ${currentTrack.title}`,
+            sourceDetail: `same artist as ${currentTrack.artist}`,
           });
         }
       } catch (err) {
@@ -59,35 +69,78 @@ export class CandidateGenerator {
       }
     }
 
-    // Lane B: Comfort — most-played tracks from history
-    try {
-      const topPlayed = this.historyStore.getTopTracks(6);
-      for (const t of topPlayed) {
-        candidates.push({
-          title: t.title, artist: t.artist,
-          source: 'comfort',
-          sourceDetail: `played ${t.play_count} times`,
-        });
+    if (currentTrack && this.smartSearch) {
+      try {
+        const related = await this.smartSearch.getRelatedTracks(currentTrack.artist, currentTrack.title, 4);
+        for (const track of related) {
+          candidates.push({
+            title: track.title,
+            artist: track.artist,
+            source: 'continuation',
+            sourceDetail: `expanded from ${currentTrack.artist}`,
+          });
+        }
+      } catch (err) {
+        console.error('[sbotify] Lane A fallback (continuation) failed:', (err as Error).message);
       }
-    } catch (err) {
-      console.error('[sbotify] Lane B (comfort) failed:', (err as Error).message);
     }
 
-    // Lane C: Context Fit — tracks matching intent tags or session lane tags
-    const lane = this.tasteEngine.getSessionLane();
-    const contextTags = intent?.allowed_tags ?? lane?.tags ?? [];
-    if (contextTags.length > 0 && this.lastFm) {
+    // Lane B: Comfort — most-played tracks from local history
+    for (const track of topPlayed) {
+      candidates.push({
+        title: track.title,
+        artist: track.artist,
+        source: 'comfort',
+        sourceDetail: `played ${track.play_count} times`,
+      });
+    }
+
+    // Lane C: Context Fit — Apple genre/catalog search first, Smart Search only if Apple is too thin
+    const contextTags = intent?.allowed_tags ?? sessionLane?.tags ?? [];
+    if (contextTags.length > 0 && (this.apple || this.smartSearch)) {
       const selectedTags = contextTags.slice(0, 2);
       for (const tag of selectedTags) {
         try {
-          const tagTracks = await this.lastFm.getTopTracksByTag(tag, 4);
-          for (const t of tagTracks) {
-            candidates.push({
-              title: t.title, artist: t.artist,
-              source: 'context_fit',
-              sourceDetail: `matches tag: ${tag}`,
-              tags: [tag],
-            });
+          let contextCount = 0;
+          if (this.apple) {
+            const genreTracks = await this.apple.searchByGenre(tag, 4);
+            for (const track of genreTracks) {
+              candidates.push({
+                title: track.title,
+                artist: track.artist,
+                source: 'context_fit',
+                sourceDetail: `matches genre: ${tag}`,
+                tags: [tag],
+              });
+              contextCount += 1;
+            }
+
+            if (contextCount < 2) {
+              const searchTracks = await this.apple.searchTracks(`${tag} instrumental`, 3);
+              for (const track of searchTracks) {
+                candidates.push({
+                  title: track.title,
+                  artist: track.artist,
+                  source: 'context_fit',
+                  sourceDetail: `matches lane query: ${tag}`,
+                  tags: [tag],
+                });
+                contextCount += 1;
+              }
+            }
+          }
+
+          if (contextCount < 2 && this.smartSearch) {
+            const moodTracks = await this.smartSearch.searchByMood(tag, 2);
+            for (const track of moodTracks) {
+              candidates.push({
+                title: track.title,
+                artist: track.artist,
+                source: 'context_fit',
+                sourceDetail: `expanded from tag: ${tag}`,
+                tags: [tag],
+              });
+            }
           }
         } catch (err) {
           console.error(`[sbotify] Lane C (context_fit) tag "${tag}" failed:`, (err as Error).message);
@@ -95,20 +148,32 @@ export class CandidateGenerator {
       }
     }
 
-    // Lane D: Wildcard — pick a similar artist, get THEIR similar tracks
-    if (currentTrack && this.lastFm) {
+    // Lane D: Wildcard — Smart Search suggests artists; Apple supplies clean catalog tracks
+    if (currentTrack && this.smartSearch) {
       try {
-        const similarArtists = await this.lastFm.getSimilarArtists(currentTrack.artist, 3);
-        if (similarArtists.length > 0) {
-          const pick = similarArtists[Math.floor(Math.random() * similarArtists.length)];
-          // Get similar tracks for a track by this artist (uses Last.fm track.getsimilar)
-          const artistSimilar = await this.lastFm.getSimilarTracks(pick.name, currentTrack.title, 2);
-          for (const t of artistSimilar) {
-            candidates.push({
-              title: t.title, artist: t.artist,
-              source: 'wildcard',
-              sourceDetail: `exploring via ${pick.name}`,
-            });
+        const suggestedArtists = await this.smartSearch.getArtistSuggestions(currentTrack.artist, 3);
+        if (suggestedArtists.length > 0) {
+          const pick = suggestedArtists[Math.floor(Math.random() * suggestedArtists.length)];
+          if (this.apple) {
+            const artistTracks = await this.apple.getArtistTracks(pick, 3);
+            for (const track of artistTracks) {
+              candidates.push({
+                title: track.title,
+                artist: track.artist,
+                source: 'wildcard',
+                sourceDetail: `exploring via ${pick}`,
+              });
+            }
+          } else {
+            const artistTracks = await this.smartSearch.getRelatedTracks(pick, pick, 2);
+            for (const track of artistTracks) {
+              candidates.push({
+                title: track.title,
+                artist: track.artist,
+                source: 'wildcard',
+                sourceDetail: `expanded via ${pick}`,
+              });
+            }
           }
         }
       } catch (err) {

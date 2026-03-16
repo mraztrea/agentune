@@ -97,7 +97,7 @@ export class TasteEngine {
       this.state.repeatTolerance = clamp(this.state.repeatTolerance + 0.02);
     }
 
-    // Tag-level feedback (tags populated async by Last.fm enrichment — may be empty on first play)
+    // Tag-level feedback (tags populated async by Apple genre enrichment — may be empty on first play)
     const trackId = normalizeTrackId(track.artist, track.title);
     const tags = this.store.getTrackTags(trackId);
     for (const tag of tags.slice(0, 5)) {

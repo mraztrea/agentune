@@ -70,6 +70,88 @@ test('QueuePlaybackController queues search results', async () => {
   assert.deepEqual(queueManager.list().map((item) => item.id), ['search-result']);
 });
 
+test('QueuePlaybackController addById queues then starts playback when idle', async () => {
+  const queueManager = new QueueManager();
+  const fakeMpv = new FakeMpv();
+  const controller = new QueuePlaybackController(
+    fakeMpv as never,
+    queueManager,
+    new FakeYouTubeProvider() as never,
+  );
+
+  const added = await controller.addById('resolved-song', {
+    canonicalArtist: 'Canonical Artist',
+    canonicalTitle: 'Canonical Title',
+  });
+
+  assert.equal(added.action, 'queued');
+  assert.equal(added.position, 1);
+  assert.equal(added.startedPlayback, true);
+  assert.equal(queueManager.getNowPlaying()?.id, 'resolved-song');
+  assert.equal(queueManager.getNowPlaying()?.artist, 'Canonical Artist');
+  assert.equal(queueManager.list().length, 0);
+  assert.equal(fakeMpv.playCalls.length, 1);
+});
+
+test('QueuePlaybackController addById queues when something is already playing', async () => {
+  const queueManager = new QueueManager();
+  const controller = new QueuePlaybackController(
+    new FakeMpv() as never,
+    queueManager,
+    new FakeYouTubeProvider() as never,
+  );
+
+  queueManager.setNowPlaying({
+    id: 'current',
+    title: 'Current',
+    artist: 'Current Artist',
+    duration: 180,
+    thumbnail: 'thumb-current',
+    url: 'https://youtube.test/current',
+  });
+
+  const added = await controller.addById('queued-song', {
+    canonicalArtist: 'Queued Artist',
+    canonicalTitle: 'Queued Title',
+  });
+
+  assert.equal(added.action, 'queued');
+  assert.equal(added.position, 1);
+  assert.equal(added.startedPlayback, false);
+  assert.equal(queueManager.getNowPlaying()?.id, 'current');
+  assert.deepEqual(queueManager.list().map((item) => item.id), ['queued-song']);
+  assert.equal(queueManager.list()[0].artist, 'Queued Artist');
+});
+
+test('QueuePlaybackController replaceCurrentTrack plays new track immediately', async () => {
+  const queueManager = new QueueManager();
+  const fakeMpv = new FakeMpv();
+  const controller = new QueuePlaybackController(
+    fakeMpv as never,
+    queueManager,
+    new FakeYouTubeProvider() as never,
+  );
+
+  queueManager.setNowPlaying({
+    id: 'current',
+    title: 'Current',
+    artist: 'Current Artist',
+    duration: 180,
+    thumbnail: 'thumb-current',
+    url: 'https://youtube.test/current',
+  });
+
+  const nowPlaying = await controller.replaceCurrentTrack('replacement', {
+    canonicalArtist: 'Replacement Artist',
+    canonicalTitle: 'Replacement Title',
+  });
+
+  assert.equal(nowPlaying.id, 'replacement');
+  assert.equal(queueManager.getNowPlaying()?.id, 'replacement');
+  assert.equal(queueManager.getNowPlaying()?.artist, 'Replacement Artist');
+  assert.equal(fakeMpv.playCalls.length, 1);
+});
+
 test('QueuePlaybackController skip plays the next queued track', async () => {
   const queueManager = new QueueManager();
   const fakeMpv = new FakeMpv();

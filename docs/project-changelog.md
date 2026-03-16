@@ -1,5 +1,71 @@
 # Project Changelog
 
+## 2026-03-16 (Apple-First MCP Flow)
+
+### Discovery-First Public Tool Surface
+- Removed public MCP tools that let agents bypass the intended flow: `search`, `play`, `queue_add`
+- Restored public MCP tool `play_song(title, artist?)`
+  - resolves canonical metadata via Apple Search API
+  - replaces the current song immediately
+- Added public MCP tool `add_song(title, artist?)`
+  - Apple Search API canonicalizes track identity first
+  - Queue-only behavior: always adds to queue
+  - If queue is idle, starts playback by draining the queue instead of bypassing queue semantics
+  - Returns canonical metadata, match score, queue position, and alternatives
+- Updated `discover()` MCP responses to point agents to `add_song(...)` while also exposing `play_song(...)` as the replace-current action
+- Updated `queue_list()` docs/wording to emphasize read-only queue inspection
+
+### Apple-First Resolution + Queue Preservation
+- Added `src/mcp/song-resolver.ts` to centralize song resolution
+  - Apple Search API is primary source for canonical title/artist cleanup
+  - YouTube search is now an internal playback fallback only
+  - Resolver tries multiple YouTube queries sequentially, so one failed query no longer aborts the whole add flow
+- Updated `src/queue/queue-playback-controller.ts`
+  - Added `addById()` for queue-only add with auto-start when idle
+  - Added `replaceCurrentTrack()` for `play_song` immediate replacement behavior
+  - Preserves canonical artist/title when queued tracks later become now-playing
+- Updated `src/taste/candidate-generator.ts`
+  - Apple artist/genre catalog is now primary for continuation + context-fit lanes
+  - Smart Search is demoted to expansion/fallback behavior instead of acting like the main recommendation graph
+
+### Validation
+- `npm run build`
+- `npm test`
+- 104/104 tests passing
+- Docs impact: minor
+
+## 2026-03-16 (Provider Replacement: Last.fm → Apple + Smart Search)
+
+### Replaced Last.fm Provider with Apple iTunes Search + Smart Search Discovery
+- Removed `src/providers/lastfm-provider.ts` — eliminates `LASTFM_API_KEY` dependency
+- Added `src/providers/apple-search-provider.ts` — zero-key Apple iTunes Search API integration
+  - `searchTracks(query, limit)` for catalog search
+  - `getArtistTracks(artist, limit)` for artist discography
+  - `getTrackGenre(artist, title)` for metadata enrichment
+  - `searchByGenre(genre, limit)` for genre-based discovery
+  - 7-day TTL cache to respect 20 calls/min rate limit
+- Added `src/providers/smart-search-provider.ts` — intelligent ytsr-based query discovery
+  - `getRelatedTracks(artist, title)` replaces Last.fm getSimilarTracks()
+  - `searchByMood(mood, limit)` replaces Last.fm getTopTracksByTag()
+  - `getArtistSuggestions(artist)` replaces Last.fm getSimilarArtists()
+  - 3-day TTL cache for query freshness
+  - Uses existing @distube/ytsr; zero new dependencies
+- Added `src/providers/metadata-normalizer.ts` — shared YouTube metadata cleanup utility
+- Updated `src/taste/candidate-generator.ts` — new provider integration
+  - Lane A (continuation): `smartSearch.getRelatedTracks()` replaces `lastfm.getSimilarTracks()`
+  - Lane C (context-fit): `smartSearch.searchByMood()` with Apple fallback
+  - Lane D (wildcard): `smartSearch.getArtistSuggestions()` replaces artist exploration
+- Updated `src/queue/queue-playback-controller.ts` — tag enrichment via Apple genre
+  - Async `enrichTrackTags()` now uses `apple.getTrackGenre()` instead of `lastfm.getTopTags()`
+  - Synthetic tag enrichment: appends discovery query keywords to genre tags
+- Updated `src/index.ts` — removed Last.fm bootstrap, added dual provider init (zero config)
+  - Both providers initialize without environment variables
+  - Graceful: both providers are optional; app runs without them
+- Updated `src/history/history-schema.ts` — renamed cache table `lastfm_cache` → `provider_cache`
+- Updated docs to reflect architecture changes (zero API keys required for discovery)
+- Build: Clean compile, 100/100 tests pass
+- Docs impact: minor
+
 ## 2026-03-16 (Runtime Compatibility)
 
 ### Node 25 Compatibility Fix

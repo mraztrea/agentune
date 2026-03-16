@@ -1,8 +1,8 @@
 import type { MpvController } from '../audio/mpv-controller.js';
 import { getHistoryStore } from '../history/history-store.js';
 import { normalizeTrackId } from '../history/history-schema.js';
-import { getLastFmProvider } from '../providers/lastfm-provider.js';
-import type { YouTubeProvider } from '../providers/youtube-provider.js';
+import { getAppleSearchProvider } from '../providers/apple-search-provider.js';
+import type { AudioInfo, YouTubeProvider } from '../providers/youtube-provider.js';
 import type { SearchResult } from '../providers/youtube-provider.js';
 import { getTasteEngine } from '../taste/taste-engine.js';
 import { getWebServer } from '../web/web-server.js';
@@ -38,42 +38,24 @@ export class QueuePlaybackController {
     id: string,
     extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
   ): Promise<QueueItem> {
-    const audio = await this.youtubeProvider.getAudioUrl(id);
-    const queueItem: QueueItem = {
-      id,
-      title: extraMeta?.canonicalTitle ?? audio.title,
-      artist: extraMeta?.canonicalArtist ?? audio.artist,
-      duration: audio.duration,
-      thumbnail: audio.thumbnail,
-      url: `https://www.youtube.com/watch?v=${id}`,
-      context: extraMeta?.context,
-    };
+    const resolved = await this.resolveQueueItem(id, extraMeta);
+    this.startPlayback(resolved.item, resolved.audio, extraMeta);
+    return resolved.item;
+  }
 
-    this.mpv.play(audio.streamUrl, queueItem);
-    this.queueManager.setNowPlaying(queueItem);
-    getWebServer()?.openDashboardOnce();
+  async addById(
+    id: string,
+    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+  ): Promise<{ item: QueueItem; action: 'queued'; position: number; startedPlayback: boolean }> {
+    const resolved = await this.resolveQueueItem(id, extraMeta);
+    const position = this.queueManager.add(resolved.item);
 
-    // Record play in history store — use canonical override when available
-    try {
-      const store = getHistoryStore();
-      if (store) {
-        const canonical = extraMeta?.canonicalArtist && extraMeta?.canonicalTitle
-          ? { artist: extraMeta.canonicalArtist, title: extraMeta.canonicalTitle }
-          : undefined;
-        this.currentPlayId = store.recordPlay(
-          { title: queueItem.title, artist: queueItem.artist, duration: queueItem.duration, thumbnail: queueItem.thumbnail, ytVideoId: id },
-          { context: queueItem.context, source: 'playById' },
-          canonical,
-        );
-      }
-    } catch (err) {
-      console.error('[sbotify] Failed to record play:', (err as Error).message);
+    if (!this.queueManager.getNowPlaying()) {
+      await this.playNextQueuedTrack();
+      return { item: resolved.item, action: 'queued', position, startedPlayback: true };
     }
 
-    // Enrich track tags from Last.fm (async, non-blocking)
-    this.enrichTrackTags(queueItem.artist, queueItem.title);
-
-    return queueItem;
+    return { item: resolved.item, action: 'queued', position, startedPlayback: false };
   }
 
   async queueByQuery(query: string): Promise<{ item: QueueItem; position: number }> {
@@ -166,18 +148,17 @@ export class QueuePlaybackController {
     await this.playNextQueuedTrack();
   }
 
-  /** Fetch tags from Last.fm and update track record (fire-and-forget). */
+  /** Fetch genre from Apple iTunes and update track tags (fire-and-forget). */
   private async enrichTrackTags(artist: string, title: string): Promise<void> {
-    const lastfm = getLastFmProvider();
+    const apple = getAppleSearchProvider();
     const store = getHistoryStore();
-    if (!lastfm || !store) return;
+    if (!apple || !store) return;
 
     try {
-      const tags = await lastfm.getTopTags(artist, title);
-      if (tags.length === 0) return;
+      const genres = await apple.getTrackGenre(artist, title);
+      if (genres.length === 0) return;
       const trackId = normalizeTrackId(artist, title);
-      const tagNames = tags.slice(0, 10).map((t) => t.name);
-      store.updateTrackTags(trackId, tagNames);
+      store.updateTrackTags(trackId, genres);
     } catch (err) {
       console.error('[sbotify] Tag enrichment failed:', (err as Error).message);
     }
@@ -190,7 +171,97 @@ export class QueuePlaybackController {
       return null;
     }
 
-    return await this.playById(nextItem.id, { context: nextItem.context });
+    return await this.playById(nextItem.id, {
+      context: nextItem.context,
+      canonicalArtist: nextItem.artist,
+      canonicalTitle: nextItem.title,
+    });
+  }
+
+  private async resolveQueueItem(
+    id: string,
+    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+  ): Promise<{ item: QueueItem; audio: AudioInfo }> {
+    const audio = await this.youtubeProvider.getAudioUrl(id);
+    return {
+      audio,
+      item: {
+        id,
+        title: extraMeta?.canonicalTitle ?? audio.title,
+        artist: extraMeta?.canonicalArtist ?? audio.artist,
+        duration: audio.duration,
+        thumbnail: audio.thumbnail,
+        url: `https://www.youtube.com/watch?v=${id}`,
+        context: extraMeta?.context,
+      },
+    };
+  }
+
+  private async recordInterruptedPlay(): Promise<void> {
+    if (this.currentPlayId === null) return;
+
+    try {
+      const store = getHistoryStore();
+      const nowPlaying = this.queueManager.getNowPlaying();
+      if (store && nowPlaying) {
+        const position = await this.mpv.getPosition().catch(() => 0);
+        store.updatePlay(this.currentPlayId, { played_sec: Math.round(position), skipped: true });
+        getTasteEngine()?.processFeedback(
+          { artist: nowPlaying.artist, title: nowPlaying.title, duration: nowPlaying.duration },
+          Math.round(position),
+          nowPlaying.duration,
+          true,
+        );
+      }
+    } catch (err) {
+      console.error('[sbotify] Failed to record interrupted play:', (err as Error).message);
+    }
+
+    this.currentPlayId = null;
+  }
+
+  private startPlayback(
+    queueItem: QueueItem,
+    audio: AudioInfo,
+    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+  ): void {
+    this.mpv.play(audio.streamUrl, queueItem);
+    this.queueManager.setNowPlaying(queueItem);
+    getWebServer()?.openDashboardOnce();
+
+    try {
+      const store = getHistoryStore();
+      if (store) {
+        const canonical = extraMeta?.canonicalArtist && extraMeta?.canonicalTitle
+          ? { artist: extraMeta.canonicalArtist, title: extraMeta.canonicalTitle }
+          : undefined;
+        this.currentPlayId = store.recordPlay(
+          {
+            title: queueItem.title,
+            artist: queueItem.artist,
+            duration: queueItem.duration,
+            thumbnail: queueItem.thumbnail,
+            ytVideoId: queueItem.id,
+          },
+          { context: queueItem.context, source: 'playById' },
+          canonical,
+        );
+      }
+    } catch (err) {
+      console.error('[sbotify] Failed to record play:', (err as Error).message);
+    }
+
+    this.enrichTrackTags(queueItem.artist, queueItem.title);
+  }
+
+  async replaceCurrentTrack(
+    id: string,
+    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+  ): Promise<QueueItem> {
+    await this.recordInterruptedPlay();
+    const resolved = await this.resolveQueueItem(id, extraMeta);
+    this.startPlayback(resolved.item, resolved.audio, extraMeta);
+    return resolved.item;
   }
 }
 

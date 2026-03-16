@@ -20,7 +20,7 @@ sbotify is a three-tier system:
 │                                                          │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │  MCP Server (Phase 2)                            │  │
-│  │  ├─ Tool Definitions (search, play, discover, ...)  │  │
+│  │  ├─ Tool Definitions (get_session_state, discover, play_song, add_song, ...)  │  │
 │  │  └─ stdio Transport (agent ↔ server)            │  │
 │  └──────────────────────────────────────────────────┘  │
 │          │               │              │       │       │
@@ -30,19 +30,20 @@ sbotify is a three-tier system:
 │  │  Provider   │ │ Manager     │ │ Pipeline (Ph. 5) │ │
 │  │ (Phase 4)   │ │ (Phase 7)   │ │ ├─ Candidate Gen │ │
 │  └─────────────┘ └─────────────┘ │ └─ Candidate Scr │ │
-│                                  └──────────────────┘ │
-│          │               │              │                │
-│          ├───────┬───────┤              │                │
-│          │       │       │               ┌────────────────┐  │
-│          │       │       │               │ Taste Engine   │  │
-│          │       │       │               │ (Phase 4)      │  │
-│          │       ▼       │               ├─ Implicit      │  │
-│          │  ┌──────────────────┐        │   feedback     │  │
-│          │  │ Last.fm Provider │        ├─ Session lanes │  │
-│          │  │ (Phase 3)        │        ├─ Agent persona │  │
-│          │  └──────────────────┘        └────────────────┘  │
-│          │       │                                            │
-│          └───────┴───────────────────┐                  │
+│         ▲                          └──────────────────┘ │
+│         │                               │                │
+│  ┌──────┴──────────┬──────────────┐    │                │
+│  │                 │              │    │                │
+│  ▼                 ▼              ▼    ▼                │
+│ ┌────────┐ ┌──────────────────┐ ┌────────────────┐     │
+│ │ Apple  │ │ Smart Search     │ │ Taste Engine   │     │
+│ │ Search │ │ Provider         │ │ (Phase 4)      │     │
+│ │ (Ph.1) │ │ (Phase 1)        │ ├─ Implicit      │     │
+│ └────────┘ └──────────────────┘ │   feedback     │     │
+│  │                 │             ├─ Session lanes │     │
+│  │                 │             ├─ Agent persona │     │
+│  └─────────┬───────┘             └────────────────┘     │
+│            ▼                                             │
 │                  ▼                    ▼                 │
 │  ┌──────────────────────────────────────────────┐     │
 │  │ mpv Controller (Phase 3)                     │     │
@@ -87,11 +88,11 @@ sbotify is a three-tier system:
 
 **Tables**:
 ```
-tracks          — Denormalized track metadata + play counts + Last.fm tags
+tracks          — Denormalized track metadata + play counts + provider-enriched tags
 plays           — Individual play events (started_at, played_sec, skipped, context)
 preferences     — Key-value user preferences (weight, boredom scores)
 session_state   — Singleton row: lane, taste state, agent persona, current intent
-lastfm_cache    — Last.fm API response cache with 7-day TTL (cache_key, response_json, fetched_at)
+provider_cache  — Provider response cache with TTL (cache_key, response_json, fetched_at)
 ```
 
 **Key Methods**:
@@ -125,21 +126,17 @@ lastfm_cache    — Last.fm API response cache with 7-day TTL (cache_key, respon
 
 **Tools**:
 ```
-Tool: search
-  Input: {query: string, limit?: number}
-  Output: {isError: boolean, results: SearchResult[]}
+Tool: add_song
+  Input: {title: string, artist?: string}
+  Output: {isError: boolean, action: "queued", added: Track, queuePosition: number, startedPlayback: boolean}
 
-Tool: play
-  Input: {id: string}
-  Output: {isError: boolean, nowPlaying: Track}
+Tool: play_song
+  Input: {title: string, artist?: string}
+  Output: {isError: boolean, action: "replaced_current", nowPlaying: Track}
 
 Tool: skip
   Input: {}
   Output: {isError: boolean, nowPlaying: Track}
-
-Tool: queue_add
-  Input: {query: string}
-  Output: {isError: boolean, added: Track, position: number}
 
 Tool: queue_list
   Input: {}
@@ -162,48 +159,52 @@ Tool: history
 
 **Error Handling**: All tool results include `isError` flag; never throw.
 
-### 1.5 Last.fm Provider (Phase 3) NEW
+### 1.5 Discovery Providers (Phase 1) — Apple iTunes Search + Smart Search
 
-**Purpose**: Query Last.fm API for music discovery and metadata enrichment (similar artists, tracks, tags).
+**Purpose**: Query music metadata and discovery APIs for clean catalog candidates, genre information, and limited query expansion.
 
-**Dependencies**:
-- `LASTFM_API_KEY` env var (optional; provider gracefully disabled if missing)
-- SQLite database (lastfm_cache table for 7-day TTL response caching)
+**Providers**:
 
-**Data Flow**:
-```
-1. getTopTags(artist: string, track?: string)
-   ├─ Cache lookup: lastfm_cache table
-   ├─ Cache miss → Last.fm API call
-   ├─ Store in cache with 7-day TTL
-   └─ Return: [{name: "indie", count: 42}, ...]
+#### Apple iTunes Search Provider
+- Zero API key required
+- Queries official Apple iTunes Search API via HTTPS
+- Methods:
+  - `searchTracks(query, limit)` — Search iTunes catalog
+  - `getArtistTracks(artist, limit)` — Fetch artist discography
+  - `getTrackGenre(artist, title)` — Extract genre metadata
+  - `searchByGenre(genre, limit)` — Genre-based discovery
+- Cache: 7-day TTL in `provider_cache` table
+- Rate limit: ~20 calls/min (cached aggressively to stay under limit)
+- Non-fatal: Returns empty array on failure (5s timeout)
 
-2. getSimilarArtists(artist: string, limit?: 10)
-   └─ Return: [{name: "...", match: 0.85}, ...]
+#### Smart Search Provider (ytsr-based)
+- Zero API key required
+- Uses existing `@distube/ytsr` for query expansion only
+- Methods:
+  - `getRelatedTracks(artist, title, limit)` — Discover similar tracks via smart queries
+  - `searchByMood(mood, limit)` — Mood-based discovery (e.g., "chill music")
+  - `getArtistSuggestions(artist, limit)` — Find similar artists
+- Cache: 3-day TTL in `provider_cache` table (for query freshness)
+- Deduplicates results; excludes current track; includes videoId for direct playback
+- Non-fatal: Returns empty array on failure
 
-3. getSimilarTracks(artist: string, track: string, limit?: 10)
-   └─ Return: [{title: "...", artist: "...", match: 0.75}, ...]
-
-4. getTopTracksByTag(tag: string, limit?: 10)
-   └─ Return: [{title: "...", artist: "..."}, ...]
-```
-
-**YouTube Metadata Normalization**:
-- Before querying Last.fm, YouTube metadata is cleaned to remove:
-  - Quality suffixes: (official audio), [HD], (lyrics), [live], etc.
-  - Featured artist suffixes: (feat. X), [ft. Y], etc.
-- Prevents cache poisoning from mismatched artist/title formats
+#### Metadata Normalizer (Shared Utility)
+- Cleans YouTube metadata before API queries
+- Removes quality suffixes: "(Official Audio)", "[HD]", "(lyrics)", "[live]", etc.
+- Removes channel markers: "- Topic", "VEVO"
+- Prevents cache poisoning from format variations
 
 **Cache Details**:
-- TTL: 7 days
+- Storage: `provider_cache` table (cache_key: "apple:...", "smart:...", response_json, fetched_at)
+- Cache keys include method name + normalized query for deduplication
 - Eviction: Expired rows deleted on startup
-- Storage: `lastfm_cache` table (cache_key, response_json, fetched_at)
-- Non-fatal: If API call fails or times out (5s), returns empty array (does not block playback)
+- Both providers share same table; TTL varies by provider (7 days Apple, 3 days Smart)
 
-**Integration with Playback**:
-- Queue playback controller asynchronously fetches tags after playback starts (fire-and-forget)
-- Tags stored in track record via `updateTrackTags(trackId, tagNames)`
-- Does not block audio playback; runs in background
+**Integration with Discovery Pipeline**:
+- Lane A (continuation): `apple.getArtistTracks(artist)` with Smart Search fallback
+- Lane C (context-fit): `apple.searchByGenre(tag)` and Apple catalog search first, Smart Search fallback second
+- Lane D (wildcard): `smartSearch.getArtistSuggestions(artist)` to suggest artists, then Apple catalog search for clean tracks
+- Tag enrichment: `apple.getTrackGenre(artist, title)`
 
 ### 2. YouTube Provider (Phase 4)
 
@@ -257,6 +258,12 @@ Tool: history
 |----|-------------|------|
 | Windows | Named Pipe | `\\.\pipe\sbotify-mpv` |
 | macOS/Linux | Unix Socket | `/tmp/sbotify-mpv` |
+
+### 1.6 Apple Search + Smart Search Providers (Phase 1)
+
+**Purpose**: Zero-config discovery metadata and smart search without API keys.
+
+Implementation combines official Apple iTunes catalog with intelligent YouTube queries.
 
 **Public API**:
 ```typescript
@@ -372,10 +379,10 @@ getState()     → Snapshot for MCP + dashboard
 
 **Lanes**:
 ```
-Continuation  — Similar tracks from Last.fm (current track context)
+Continuation  — Same-artist / near-lane tracks from Apple catalog (current track context)
 Comfort       — Most-played tracks from history (familiar favorites)
-Context-fit   — Tracks matching music intent tags or session lane tags
-Wildcard      — Exploration via similar artists (novelty seeking)
+Context-fit   — Apple genre/catalog matches for intent or session lane tags
+Wildcard      — Exploration via Smart Search artist suggestions + Apple catalog
 ```
 
 **Discover Modes** (control lane ratios):
@@ -407,7 +414,7 @@ Agent calls discover(mode, intent) → CandidateGenerator produces 4 lanes
   ↓
 CandidateScorer ranks candidates (8-term formula) → returns ScoredCandidate[]
   ↓
-Agent selects candidate → calls play(id) or play_song(title, artist)
+Agent selects candidate → calls add_song(title, artist) or play_song(title, artist)
   ↓
 TasteEngine.processFeedback() on finish/skip → updates taste state for next discovery cycle
 ```
@@ -492,10 +499,10 @@ getRandomMoodQuery(mood: Mood): string
    ├─ MCP Server creates CandidateGenerator + CandidateScorer
 
 4. CandidateGenerator produces 4 lanes of candidates
-   ├─ Lane A (Continuation): Similar tracks from Last.fm (current track context)
+   ├─ Lane A (Continuation): Similar tracks from SmartSearchProvider (current track context)
    ├─ Lane B (Comfort): Most-played tracks from history
-   ├─ Lane C (Context-fit): Tracks matching intent.allowed_tags or session lane tags
-   ├─ Lane D (Wildcard): Exploration via similar artists
+   ├─ Lane C (Context-fit): Tracks matching intent.allowed_tags or session lane tags via SmartSearchProvider.searchByMood() + Apple fallback
+   ├─ Lane D (Wildcard): Exploration via SmartSearchProvider.getArtistSuggestions()
    └─ Deduplicates + filters intent.avoid_tags
 
 5. CandidateScorer scores candidates using 8 weighted terms
@@ -514,8 +521,10 @@ getRandomMoodQuery(mood: Mood): string
    ├─ explore mode: temp=1.2 (high entropy, more diversity)
    └─ Returns top-k candidates with scores + reasons
 
-7. Agent selects a candidate and calls play(id) or play_song(title, artist)
-   ├─ YouTube Provider resolves to stream URL
+7. Agent selects a candidate and calls add_song(title, artist)
+   ├─ Apple Search canonicalizes the track identity
+   ├─ YouTube Provider resolves to stream URL only after canonicalization
+   ├─ If nothing is currently playing, queue auto-starts from the queued item
    ├─ Queue Playback Controller: recordPlay() + updatePlay() on finish
    ├─ Taste Engine: processFeedback() on skip/finish (updates taste state)
    └─ Dashboard updates in real-time via WebSocket

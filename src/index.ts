@@ -10,7 +10,8 @@ import { createWebServer, getWebServer } from './web/web-server.js';
 import { createQueueManager } from './queue/queue-manager.js';
 import { createQueuePlaybackController, getQueuePlaybackController } from './queue/queue-playback-controller.js';
 import { createHistoryStore, getHistoryStore } from './history/history-store.js';
-import { createLastFmProvider } from './providers/lastfm-provider.js';
+import { createAppleSearchProvider } from './providers/apple-search-provider.js';
+import { createSmartSearchProvider } from './providers/smart-search-provider.js';
 import { createTasteEngine } from './taste/taste-engine.js';
 
 async function main() {
@@ -23,19 +24,7 @@ async function main() {
     console.error('[sbotify] History DB unavailable:', (err as Error).message);
   }
 
-  // Initialize Last.fm provider (optional — discovery degrades gracefully)
-  const lastFmApiKey = process.env.LASTFM_API_KEY;
-  if (lastFmApiKey) {
-    const store = getHistoryStore();
-    if (store) {
-      createLastFmProvider(lastFmApiKey, store.getDatabase());
-      console.error('[sbotify] Last.fm provider initialized.');
-    }
-  } else {
-    console.error('[sbotify] No LASTFM_API_KEY — discovery features will be limited.');
-  }
-
-  // Initialize taste engine (depends on history store)
+  // Initialize discovery providers (zero-config, no API keys)
   const store = getHistoryStore();
   if (store) {
     createTasteEngine(store);
@@ -45,6 +34,14 @@ async function main() {
   // Initialize components
   const queueManager = createQueueManager();
   const youtubeProvider = createYoutubeProvider();
+
+  // Initialize discovery providers (Apple iTunes + Smart Search — zero API keys)
+  if (store) {
+    const db = store.getDatabase();
+    createAppleSearchProvider(db);
+    createSmartSearchProvider(youtubeProvider, db);
+    console.error('[sbotify] Discovery providers initialized (Apple + Smart Search).');
+  }
 
   // Initialize audio engine — non-fatal if mpv is missing
   const mpv = createMpvController();

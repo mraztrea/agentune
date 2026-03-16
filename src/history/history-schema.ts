@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS session_state (
   current_intent_json TEXT DEFAULT '{}'
 );
 
-CREATE TABLE IF NOT EXISTS lastfm_cache (
+CREATE TABLE IF NOT EXISTS provider_cache (
   cache_key TEXT PRIMARY KEY,
   response_json TEXT NOT NULL,
   fetched_at INTEGER NOT NULL

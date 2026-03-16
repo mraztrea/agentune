@@ -2,9 +2,10 @@
 
 import { getMpvController } from '../audio/mpv-controller.js';
 import { getHistoryStore } from '../history/history-store.js';
-import { getLastFmProvider } from '../providers/lastfm-provider.js';
-import { scoreSearchResults } from '../providers/search-result-scorer.js';
+import { getSmartSearchProvider } from '../providers/smart-search-provider.js';
+import { getAppleSearchProvider } from '../providers/apple-search-provider.js';
 import { getYoutubeProvider } from '../providers/youtube-provider.js';
+import { resolveSong } from './song-resolver.js';
 import { CandidateGenerator, type MusicIntent } from '../taste/candidate-generator.js';
 import { CandidateScorer, TEMPERATURE } from '../taste/candidate-scorer.js';
 import { getTasteEngine } from '../taste/taste-engine.js';
@@ -22,123 +23,104 @@ function errorResult(message: string): ToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
-async function playResolvedTrack(id: string, extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string }): Promise<{
-  meta: {
-    id: string;
-    title: string;
-    artist: string;
-    duration: number;
-    thumbnail: string;
-  };
-}> {
-  const queuePlaybackController = getQueuePlaybackController();
-  if (!queuePlaybackController) {
-    throw new Error('Queue playback controller not initialized.');
-  }
-
-  const mpv = getMpvController();
-  if (!mpv || !mpv.isReady()) {
-    throw new Error('Audio engine not initialized. Is mpv installed?');
-  }
-  const meta = await queuePlaybackController.playById(id, extraMeta);
-  return { meta };
-}
-
-export async function handleSearch(args: { query: string; limit: number }): Promise<ToolResult> {
-  try {
-    const yt = getYoutubeProvider();
-    if (!yt) return errorResult('YouTube provider not initialized.');
-
-    const results = await yt.search(args.query, args.limit);
-    if (results.length === 0) {
-      return textResult({ results: [], message: `No results found for "${args.query}".` });
-    }
-
-    return textResult({
-      results: results.map(r => ({
-        id: r.id,
-        title: r.title,
-        artist: r.artist,
-        duration: r.duration,
-        thumbnail: r.thumbnail,
-        url: r.url,
-      })),
-      message: `Found ${results.length} result(s) for "${args.query}".`,
-    });
-  } catch (err) {
-    return errorResult(`Search failed: ${(err as Error).message}`);
-  }
-}
-
-export async function handlePlay(args: { id: string }): Promise<ToolResult> {
-  try {
-    const { meta } = await playResolvedTrack(args.id);
-
-    return textResult({
-      nowPlaying: meta,
-      message: `Now playing: ${meta.title} by ${meta.artist}`,
-    });
-  } catch (err) {
-    return errorResult(`Play failed: ${(err as Error).message}`);
-  }
-}
-
 export async function handlePlaySong(args: { title: string; artist?: string }): Promise<ToolResult> {
   try {
     const yt = getYoutubeProvider();
     if (!yt) return errorResult('YouTube provider not initialized.');
+    const apple = getAppleSearchProvider();
+    const queuePlaybackController = getQueuePlaybackController();
+    if (!queuePlaybackController) return errorResult('Queue playback controller not initialized.');
 
-    const { title, artist } = args;
-    const MIN_SCORE = 0.2;
-
-    // Build primary query: prefer "artist - title official audio" when artist given
-    const primaryQuery = artist ? `${artist} - ${title} official audio` : `${title} official audio`;
-    let results = await yt.search(primaryQuery, 10);
-    let scored = scoreSearchResults(results, title, artist);
-
-    // Fallback query if top score too low and artist was provided
-    if ((scored.length === 0 || scored[0].score < MIN_SCORE) && artist) {
-      const fallbackQuery = `${artist} ${title}`;
-      results = await yt.search(fallbackQuery, 10);
-      scored = scoreSearchResults(results, title, artist);
-    }
-
-    if (scored.length === 0 || scored[0].score < MIN_SCORE) {
-      const label = artist ? `"${title}" by ${artist}` : `"${title}"`;
+    const resolved = await resolveSong(yt, apple, args);
+    if (!resolved.matched || !resolved.result) {
+      const label = args.artist ? `"${args.title}" by ${args.artist}` : `"${args.title}"`;
       return textResult({
         matched: false,
-        message: `No good match found for ${label}. Top score: ${scored[0]?.score ?? 0}.`,
-        alternatives: scored.slice(0, 3).map((s) => ({
-          id: s.result.id,
-          title: s.result.title,
-          artist: s.result.artist,
-          score: s.score,
-          reasons: s.reasons,
-        })),
+        canonical: {
+          title: resolved.canonicalTitle,
+          artist: resolved.canonicalArtist,
+          source: resolved.canonicalSource,
+        },
+        message: `No good match found for ${label}. Top score: ${resolved.matchScore}.`,
+        alternatives: resolved.alternatives,
       });
     }
 
-    const best = scored[0];
-    const { meta } = await playResolvedTrack(best.result.id, {
-      canonicalArtist: artist,
-      canonicalTitle: title,
+    const nowPlaying = await queuePlaybackController.replaceCurrentTrack(resolved.result.id, {
+      canonicalArtist: resolved.canonicalArtist,
+      canonicalTitle: resolved.canonicalTitle,
     });
 
     return textResult({
       matched: true,
-      nowPlaying: meta,
-      matchScore: best.score,
-      matchReasons: best.reasons,
-      alternatives: scored.slice(1, 4).map((s) => ({
-        id: s.result.id,
-        title: s.result.title,
-        artist: s.result.artist,
-        score: s.score,
-      })),
-      message: `Now playing: ${meta.title} by ${meta.artist} (match score: ${best.score})`,
+      action: 'replaced_current',
+      nowPlaying,
+      canonical: {
+        title: resolved.canonicalTitle,
+        artist: resolved.canonicalArtist,
+        source: resolved.canonicalSource,
+      },
+      matchScore: resolved.matchScore,
+      matchReasons: resolved.matchReasons,
+      alternatives: resolved.alternatives,
+      message: `Now playing: ${nowPlaying.title} by ${nowPlaying.artist} (match score: ${resolved.matchScore})`,
     });
   } catch (err) {
     return errorResult(`Play song failed: ${(err as Error).message}`);
+  }
+}
+
+export async function handleAddSong(args: { title: string; artist?: string }): Promise<ToolResult> {
+  try {
+    const yt = getYoutubeProvider();
+    if (!yt) return errorResult('YouTube provider not initialized.');
+    const apple = getAppleSearchProvider();
+    const queuePlaybackController = getQueuePlaybackController();
+    if (!queuePlaybackController) return errorResult('Queue playback controller not initialized.');
+
+    const resolved = await resolveSong(yt, apple, args);
+    if (!resolved.matched || !resolved.result) {
+      const label = args.artist ? `"${args.title}" by ${args.artist}` : `"${args.title}"`;
+      return textResult({
+        matched: false,
+        canonical: {
+          title: resolved.canonicalTitle,
+          artist: resolved.canonicalArtist,
+          source: resolved.canonicalSource,
+        },
+        message: `No good match found for ${label}. Top score: ${resolved.matchScore}.`,
+        alternatives: resolved.alternatives,
+      });
+    }
+
+    const addResult = await queuePlaybackController.addById(resolved.result.id, {
+      canonicalArtist: resolved.canonicalArtist,
+      canonicalTitle: resolved.canonicalTitle,
+    });
+    const queueManager = getQueueManager();
+    const nowPlaying = queueManager?.getNowPlaying() ?? null;
+
+    return textResult({
+      matched: true,
+      action: addResult.action,
+      nowPlaying,
+      added: addResult.item,
+      queuePosition: addResult.position,
+      startedPlayback: addResult.startedPlayback,
+      canonical: {
+        title: resolved.canonicalTitle,
+        artist: resolved.canonicalArtist,
+        source: resolved.canonicalSource,
+      },
+      matchScore: resolved.matchScore,
+      matchReasons: resolved.matchReasons,
+      alternatives: resolved.alternatives,
+      message: addResult.startedPlayback
+        ? `Added ${addResult.item.title} by ${addResult.item.artist} to queue at position ${addResult.position} and started playback because the queue was idle.`
+        : `Added ${addResult.item.title} by ${addResult.item.artist} to queue at position ${addResult.position}.`,
+    });
+  } catch (err) {
+    return errorResult(`Add song failed: ${(err as Error).message}`);
   }
 }
 
@@ -151,8 +133,9 @@ export async function handleDiscover(args: { mode?: string; intent?: MusicIntent
 
     const mode = (args.mode ?? 'balanced') as 'focus' | 'balanced' | 'explore';
 
-    const lastFm = getLastFmProvider();
-    const generator = new CandidateGenerator(lastFm, store, taste);
+    const smartSearch = getSmartSearchProvider();
+    const apple = getAppleSearchProvider();
+    const generator = new CandidateGenerator(smartSearch, apple, store, taste);
     const scorer = new CandidateScorer(taste, store);
 
     // Get current track for continuation lane
@@ -166,7 +149,7 @@ export async function handleDiscover(args: { mode?: string; intent?: MusicIntent
     if (candidates.length === 0) {
       return textResult({
         suggestions: [],
-        message: 'No candidates found. Try playing a track first so discover has context to work with.',
+        message: 'No candidates found. Try adding a track first so discover has context to work with.',
       });
     }
 
@@ -185,10 +168,11 @@ export async function handleDiscover(args: { mode?: string; intent?: MusicIntent
         score: s.score,
         source: s.source,
         reasons: s.reasons,
-        hint: `play_song({ title: '${s.title.replace(/'/g, "\\'")}', artist: '${s.artist.replace(/'/g, "\\'")}' })`,
+        hint: `add_song({ title: '${s.title.replace(/'/g, "\\'")}', artist: '${s.artist.replace(/'/g, "\\'")}' })`,
+        replace_hint: `play_song({ title: '${s.title.replace(/'/g, "\\'")}', artist: '${s.artist.replace(/'/g, "\\'")}' })`,
       })),
       lane: lane ? { description: lane.description, songCount: lane.songCount } : null,
-      tip: 'Pick one and use play_song(). Call discover() again after a few tracks.',
+      tip: 'Use add_song() to queue a suggestion, or play_song() to replace the current track immediately.',
     });
   } catch (err) {
     return errorResult(`Discover failed: ${(err as Error).message}`);
@@ -233,52 +217,6 @@ export async function handleSkip(): Promise<ToolResult> {
     });
   } catch (err) {
     return errorResult(`Skip failed: ${(err as Error).message}`);
-  }
-}
-
-export async function handleQueueAdd(args: { query?: string; id?: string }): Promise<ToolResult> {
-  try {
-    if (!args.query && !args.id) {
-      return errorResult('Provide either a search query or a video ID.');
-    }
-
-    const queuePlaybackController = getQueuePlaybackController();
-    if (!queuePlaybackController) return errorResult('Queue playback controller not initialized.');
-
-    // Queue by video ID directly
-    if (args.id) {
-      const queueManager = getQueueManager();
-      if (!queueManager) return errorResult('Queue manager not initialized.');
-
-      const yt = getYoutubeProvider();
-      if (!yt) return errorResult('YouTube provider not initialized.');
-
-      const audio = await yt.getAudioUrl(args.id);
-      const item = {
-        id: args.id,
-        title: audio.title,
-        artist: audio.artist,
-        duration: audio.duration,
-        thumbnail: audio.thumbnail,
-        url: `https://www.youtube.com/watch?v=${args.id}`,
-      };
-      const position = queueManager.add(item);
-      return textResult({
-        added: item,
-        position,
-        message: `Added ${item.title} by ${item.artist} to queue.`,
-      });
-    }
-
-    // Queue by search query
-    const { item, position } = await queuePlaybackController.queueByQuery(args.query!);
-    return textResult({
-      added: item,
-      position,
-      message: `Added ${item.title} by ${item.artist} to queue.`,
-    });
-  } catch (err) {
-    return errorResult(`Queue add failed: ${(err as Error).message}`);
   }
 }
 

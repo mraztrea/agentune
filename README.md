@@ -2,16 +2,16 @@
 
 **MCP music server — let your coding agent be your DJ.**
 
-sbotify is a Model Context Protocol (MCP) server that enables coding agents (Claude Code, Cursor, Codex) to control music playback like a professional DJ. Search YouTube, play songs, manage queues, and set moods — all through natural language while your agent writes code.
+sbotify is a Model Context Protocol (MCP) server that enables coding agents (Claude Code, Cursor, Codex) to control music playback like a professional DJ. Discover tracks from your current taste state, play songs immediately, add songs to the queue, and keep a continuous session lane — all through natural language while your agent writes code.
 
 ## Features
 
-- **Agent-driven music control**: Search, play, skip, queue songs via MCP protocol
-- **Discovery pipeline**: 4-lane intelligent suggestions (continuation, comfort, context-fit, wildcard) with 8-term scoring
+- **Agent-driven music control**: Taste-aware `discover -> play_song/add_song -> feedback` flow via MCP
+- **Apple-first discovery pipeline**: 4-lane suggestions (continuation, comfort, context-fit, wildcard) with local reranking
 - **Browser dashboard**: Real-time now-playing info + volume slider on localhost:3737
 - **Headless playback**: Audio plays independently via mpv (no browser needed)
 - **Cross-platform**: Works on Windows, macOS, Linux
-- **YouTube MVP**: No API keys required; uses @distube/ytsr + yt-dlp
+- **Zero-key resolver**: Apple Search API for canonical catalog lookup, yt-dlp for playback resolution
 
 ## Quick Start
 
@@ -65,7 +65,8 @@ Add to your `Claude.md` or claude config:
 ```
 
 Then ask Claude Code:
-> "Play relaxing lo-fi beats for focus"
+> "Call get_session_state, discover a focus track, then add it to the queue"
+> "Play Blinding Lights by The Weeknd right now"
 > "What song is playing?"
 > "Skip to the next track"
 
@@ -88,7 +89,7 @@ Coding Agent (Claude Code/Cursor)
 ├─────────────────────────────────────┤
 │  • MCP Tool Definitions (Phase 2)   │
 │  • mpv Audio Engine (Phase 3)       │
-│  • YouTube Provider (Phase 4)       │
+│  • Apple-first Resolver (Phase 4)   │
 │  • Queue Manager (Phase 7)          │
 └─────────────────────────────────────┘
     │                              │
@@ -146,7 +147,7 @@ See [Project Roadmap](./docs/project-roadmap.md) for detailed timelines and depe
 
 ## Success Criteria
 
-- Agent can search, play, skip, queue songs **without human intervention**
+- Agent can discover, play, queue, skip, and continue songs **without human intervention**
 - Browser dashboard displays now-playing + volume control
 - Audio plays **independently** (mpv headless mode)
 - **< 3 seconds** from "play" command to audio output
