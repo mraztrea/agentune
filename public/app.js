@@ -3,7 +3,7 @@ const elements = {
   art: document.querySelector('[data-art]'),
   currentTime: document.querySelector('[data-current-time]'),
   duration: document.querySelector('[data-duration]'),
-  mood: document.querySelector('[data-mood]'),
+  lane: document.querySelector('[data-lane]'),
   mute: document.querySelector('[data-mute]'),
   progress: document.querySelector('[data-progress]'),
   queue: document.querySelector('[data-queue]'),
@@ -40,7 +40,7 @@ function renderState(state) {
   elements.progress.style.width = `${state.duration > 0 ? (state.position / state.duration) * 100 : 0}%`;
   elements.volume.value = String(state.volume);
   elements.mute.textContent = state.muted ? 'Unmute' : 'Mute';
-  elements.mood.textContent = state.mood ?? 'No mood';
+  elements.lane.textContent = state.lane ? `${state.lane.description} (${state.lane.songCount} tracks)` : 'No lane';
   elements.art.src = state.thumbnail || 'https://placehold.co/640x640/10131a/e6ecff?text=Sbotify';
   renderQueue(state.queue);
 }

@@ -1,5 +1,4 @@
 import { EventEmitter } from 'events';
-import type { Mood } from '../mood/mood-presets.js';
 
 const MAX_HISTORY_ITEMS = 20;
 
@@ -10,7 +9,7 @@ export interface QueueItem {
   duration: number;
   thumbnail: string;
   url: string;
-  mood?: Mood;
+  context?: string;
 }
 
 export interface QueueState {

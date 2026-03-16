@@ -6,15 +6,12 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { unlinkSync } from 'fs';
 import { getIpcPath } from './platform-ipc-path.js';
-import type { Mood } from '../mood/mood-presets.js';
-
 export interface TrackMeta {
   id: string;
   title: string;
   artist?: string;
   duration?: number;
   thumbnail?: string;
-  mood?: Mood;
 }
 
 interface MpvState {

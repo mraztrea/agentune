@@ -1,5 +1,56 @@
 # Project Changelog
 
+## 2026-03-16 (Runtime Compatibility)
+
+### Node 25 Compatibility Fix
+- Updated `src/providers/youtube-provider.ts` to lazy-load `@distube/ytsr` instead of importing it at module load time
+- Added a small Node 25 compatibility shim before loading `@distube/ytsr`
+  - Maps legacy `fs.rmdirSync(..., { recursive: true })` behavior to `fs.rmSync(..., { recursive: true })`
+  - Avoids startup crash on Node.js v25 while leaving `node_modules/` untouched
+- Verified build + test still pass after the runtime fix
+- Startup path can now reach MCP bootstrap on local Node 25 installs
+- Docs impact: minor
+- Unresolved questions:
+  - None
+## 2026-03-16 (Phase 5.5: Discovery Pipeline)
+
+### Phase 5.5: Discovery Pipeline — 4-Lane Generation + 8-Term Scoring
+- Added `src/taste/candidate-generator.ts` — CandidateGenerator class with 4 independent lanes
+  - Continuation lane: Similar tracks from Last.fm (current track context)
+  - Comfort lane: Most-played tracks from history (familiar favorites)
+  - Context-fit lane: Tracks matching music intent tags or session lane tags
+  - Wildcard lane: Exploration via similar artists (novelty discovery)
+  - Lane ratios configurable by discover mode (focus/balanced/explore)
+  - Automatic deduplication + tag filtering
+- Added `src/taste/candidate-scorer.ts` — CandidateScorer class with 8-term scoring formula
+  - Context match (0.32): Fits intent/session lane
+  - Taste match (0.24): Aligned with artist obsessions
+  - Transition quality (0.18): Smooth from current track
+  - Familiarity fit (0.10): Repeat tolerance + callback love
+  - Exploration bonus (0.08): Novelty appetite + persona curiosity
+  - Freshness bonus (0.08): Never-played tracks
+  - Repetition penalty (-0.22): antiMonotony scaling
+  - Boredom penalty (-0.18): Artist boredom scores
+  - Softmax sampling with mode-based temperature (focus: 0.3, balanced: 0.7, explore: 1.2)
+- Added `src/taste/candidate-scorer.test.ts` with unit tests for scoring algorithm
+- Added new MCP tool `discover(mode?, intent?)` to `src/mcp/mcp-server.ts`
+  - Mode: "focus" (deterministic), "balanced" (default), "explore" (high entropy)
+  - Intent: optional {energy?, valence?, novelty?, allowed_tags?, avoid_tags?}
+  - Returns: array of ScoredCandidate with score + reasons
+- Added new MCP tool `get_session_state()` to `src/mcp/mcp-server.ts`
+  - Returns: full taste profile + agent persona + current session lane + recent 5 plays
+  - Enables agent to understand taste context before calling discover()
+- Updated `src/mcp/tool-handlers.ts` with handleDiscover + handleGetSessionState
+  - handleDiscover instantiates CandidateGenerator + CandidateScorer
+  - handleGetSessionState returns taste summary for agent context
+- Updated `src/queue/queue-manager.ts` — QueueItem.context field (replaces deprecated mood field)
+- Updated `src/web/state-broadcaster.ts` — Dashboard broadcasts context instead of mood
+- Deprecated `play_mood` tool; agents should use discover() + play() instead
+- Updated `README.md` — Features section now references discovery pipeline, removed mood references
+- Updated `docs/codebase-summary.md` — Removed mood section, added candidate-generator + candidate-scorer
+- Updated `docs/system-architecture.md` — New Discovery Pipeline component section with full data flow
+- All 90+ unit tests passing; build clean; zero new external dependencies
+
 ## 2026-03-16 (Continued)
 
 ### Phase 4: Taste Intelligence + Session Lanes

@@ -1,7 +1,6 @@
 import type { MpvController } from '../audio/mpv-controller.js';
 import { getHistoryStore } from '../history/history-store.js';
 import { normalizeTrackId } from '../history/history-schema.js';
-import type { Mood } from '../mood/mood-presets.js';
 import { getLastFmProvider } from '../providers/lastfm-provider.js';
 import type { YouTubeProvider } from '../providers/youtube-provider.js';
 import type { SearchResult } from '../providers/youtube-provider.js';
@@ -37,7 +36,7 @@ export class QueuePlaybackController {
 
   async playById(
     id: string,
-    extraMeta?: { mood?: Mood; canonicalArtist?: string; canonicalTitle?: string },
+    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
   ): Promise<QueueItem> {
     const audio = await this.youtubeProvider.getAudioUrl(id);
     const queueItem: QueueItem = {
@@ -47,7 +46,7 @@ export class QueuePlaybackController {
       duration: audio.duration,
       thumbnail: audio.thumbnail,
       url: `https://www.youtube.com/watch?v=${id}`,
-      mood: extraMeta?.mood,
+      context: extraMeta?.context,
     };
 
     this.mpv.play(audio.streamUrl, queueItem);
@@ -63,7 +62,7 @@ export class QueuePlaybackController {
           : undefined;
         this.currentPlayId = store.recordPlay(
           { title: queueItem.title, artist: queueItem.artist, duration: queueItem.duration, thumbnail: queueItem.thumbnail, ytVideoId: id },
-          { mood: queueItem.mood, source: 'playById' },
+          { context: queueItem.context, source: 'playById' },
           canonical,
         );
       }
@@ -191,7 +190,7 @@ export class QueuePlaybackController {
       return null;
     }
 
-    return await this.playById(nextItem.id, { mood: nextItem.mood });
+    return await this.playById(nextItem.id, { context: nextItem.context });
   }
 }
 

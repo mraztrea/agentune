@@ -41,9 +41,10 @@ Phase 1 (Setup)
 | 3.5. Last.fm Provider + Cache | 0.5 days | ✓ COMPLETE | Mar 16 | Mar 16 |
 | 4. YouTube + Taste Intelligence | 1 day | ✓ COMPLETE | Mar 15 | Mar 16 |
 | 5. Dashboard | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
+| 5.5. Discovery Pipeline | 0.5 days | ✓ COMPLETE | Mar 16 | Mar 16 |
 | 6. Mood Mode | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
 | 7. Queue + Polish | 1 day | ✓ COMPLETE | Mar 15 | Mar 15 |
-| **Total** | **~9 days** | **100%** | **Mar 15** | **Mar 16** |
+| **Total** | **~10 days** | **100%** | **Mar 15** | **Mar 16** |
 
 **Notes**:
 - Phases 1–4 complete: Agent-driven music control with taste intelligence and session lanes
@@ -51,9 +52,111 @@ Phase 1 (Setup)
 - Phase 3.5 added (Mar 16): Last.fm provider + 7-day SQLite cache for music discovery
 - Phase 4 expanded (Mar 16): YouTube provider + TasteEngine with implicit feedback, session lanes, agent persona
 - Phase 5 completed: Live browser dashboard with real-time updates
-- Phase 6 completed: Curated mood pools (focus, energetic, chill, debug, ship)
+- Phase 5.5 added (Mar 16): Discovery pipeline with 4-lane candidate generation + 8-term scoring; play_mood deprecated
+- Phase 6 completed: Curated mood pools (focus, energetic, chill, debug, ship) — now deprecated, replaced by discover
 - Phase 7 completed: Real queue playback, history, auto-advance, and release-prep files
 - Public npm publish remains deferred by user request
+
+## Phase 5.5: Discovery Pipeline (COMPLETE)
+
+**Status**: ✓ COMPLETE (Mar 16)
+
+**Objectives**:
+- [x] Implement 4-lane candidate generation (continuation, comfort, context-fit, wildcard)
+- [x] Score candidates with 8 weighted terms
+- [x] Integrate with Taste Engine for context-aware suggestions
+- [x] Add discover MCP tool with mode + intent parameters
+- [x] Add get_session_state MCP tool for taste context
+- [x] Deprecate play_mood tool (replace with discover)
+- [x] Update QueueItem to use context field instead of mood
+
+**Deliverables**:
+- [x] `src/taste/candidate-generator.ts` — 4-lane generation (continuation, comfort, context-fit, wildcard)
+- [x] `src/taste/candidate-scorer.ts` — 8-term scoring + softmax sampling with temperature control
+- [x] `src/taste/candidate-scorer.test.ts` — Unit tests for scoring algorithm
+- [x] Updated `src/mcp/mcp-server.ts` — Added discover + get_session_state tools
+- [x] Updated `src/mcp/tool-handlers.ts` — handleDiscover + handleGetSessionState
+- [x] Updated `src/queue/queue-manager.ts` — QueueItem.context field (replaces mood)
+- [x] Updated `src/web/state-broadcaster.ts` — Dashboard context field (replaces mood)
+- [x] Updated `README.md` — Features section reflects discover, removed mood references
+- [x] Updated `docs/codebase-summary.md` — Module list, tool definitions
+- [x] Updated `docs/system-architecture.md` — New Discovery Pipeline section, data flow example
+
+**Key Implementation**:
+```typescript
+// 4-lane candidate generation
+async CandidateGenerator.generate(currentTrack?, intent?, mode = 'balanced'): Promise<Candidate[]>
+
+// 8-term scoring formula
+CandidateScorer.score(candidates[], currentTrack?, intent?): ScoredCandidate[]
+  ├─ Context match (0.32)
+  ├─ Taste match (0.24)
+  ├─ Transition quality (0.18)
+  ├─ Familiarity fit (0.10)
+  ├─ Exploration bonus (0.08)
+  ├─ Freshness bonus (0.08)
+  ├─ Repetition penalty (-0.22)
+  └─ Boredom penalty (-0.18)
+
+// Mode-based temperature for softmax sampling
+focus: 0.3 (deterministic, top candidates)
+balanced: 0.7 (default mix)
+explore: 1.2 (high entropy, diverse)
+```
+
+**Discovery Modes** (control lane ratios):
+```
+focus   → 50% continuation, 30% comfort, 15% context-fit, 5% wildcard
+balanced → 40% continuation, 30% comfort, 20% context-fit, 10% wildcard
+explore  → 20% continuation, 15% comfort, 30% context-fit, 35% wildcard
+```
+
+**MCP Tools**:
+```
+discover(mode?, intent?): Returns scored candidates from 4 lanes
+get_session_state(): Returns taste profile + persona + session lane + recent plays
+```
+
+**Data Integration**:
+- Candidate Generator uses Last.fm for continuation/wildcard lanes
+- Candidate Scorer uses Taste Engine obsessions/boredom for weighted terms
+- Scoring uses Agent Persona (curiosity, antiMonotony, callbackLove) for term application
+- Session Lane tags used for context matching in Lane C
+- Play/skip feedback flows back to Taste Engine via queue playback controller
+
+**Backward Compatibility**:
+- `play_mood` tool still available but deprecated; agents should use `discover()` instead
+- MCP tool definitions updated to include discover + get_session_state; play_mood marked as legacy
+
+**Acceptance Criteria**:
+- [x] 4-lane candidate generation produces expected sources
+- [x] 8-term scoring formula applies correctly
+- [x] Softmax temperature affects sample diversity (focus vs. explore)
+- [x] Context field flows through queue + dashboard
+- [x] All unit tests pass (candidate-scorer.test.ts)
+- [x] `npm run build` produces clean dist/
+- [x] No new external dependencies
+- [x] Taste state from recent plays fed into scoring
+
+**Files Created/Modified**:
+- [x] `src/taste/candidate-generator.ts` (137 LOC)
+- [x] `src/taste/candidate-scorer.ts` (120+ LOC)
+- [x] `src/taste/candidate-scorer.test.ts` (new)
+- [x] `src/mcp/mcp-server.ts` (added discover + get_session_state tools)
+- [x] `src/mcp/tool-handlers.ts` (added handleDiscover + handleGetSessionState)
+- [x] `src/queue/queue-manager.ts` (QueueItem.context)
+- [x] `src/web/state-broadcaster.ts` (context instead of mood)
+- [x] `README.md` (discovery pipeline + removed mood references)
+- [x] `docs/codebase-summary.md` (module updates)
+- [x] `docs/system-architecture.md` (new section + data flow)
+
+**Notes**:
+- Play_mood tool is now a legacy wrapper; new workflows should use discover() + play()
+- Discovery context enables agent to understand why each candidate was suggested
+- Taste engine state is fully integrated into scoring (obsessions, boredom, persona)
+- Ready for future agent implementations of recommendation strategies
+
+---
 
 ## Phase 1+: SQLite History Foundation (COMPLETE)
 
@@ -753,20 +856,21 @@ export class QueueManager {
 
 ## Progress Tracking
 
-**Last Updated**: Mar 16, 2026 (Phase 4 Taste Intelligence + Session Lanes; Phase 3.5 Last.fm provider; Phase 2 Smart Play expansion; Phase 7 + Phase 1+ completion; publish deferred)
+**Last Updated**: Mar 16, 2026 (Phase 5.5 Discovery Pipeline; Phase 4 Taste Intelligence + Session Lanes; Phase 3.5 Last.fm provider; Phase 2 Smart Play; Phases 1, 1+, 5, 6, 7 complete; publish deferred)
 
 | Phase | Status | % Complete | Notes |
 |-------|--------|-----------|-------|
 | 1 | ✓ COMPLETE | 100% | Project setup + initial docs |
 | 1+ | ✓ COMPLETE | 100% | SQLite history + history MCP tool |
-| 2 | ✓ COMPLETE | 100% | McpServer + 12 tools; play_song with search-result-scorer |
+| 2 | ✓ COMPLETE | 100% | McpServer + tools; play_song with search-result-scorer |
 | 3 | ✓ COMPLETE | 100% | MpvController + cross-platform IPC |
 | 3.5 | ✓ COMPLETE | 100% | Last.fm provider + 7-day SQLite cache |
 | 4 | ✓ COMPLETE | 100% | YouTubeProvider + TasteEngine with implicit feedback + session lanes |
 | 5 | ✓ COMPLETE | 100% | Web server + WebSocket dashboard |
-| 6 | ✓ COMPLETE | 100% | Curated mood pools + dashboard mood state |
+| 5.5 | ✓ COMPLETE | 100% | Discovery pipeline: 4-lane generation + 8-term scoring; play_mood deprecated |
+| 6 | ✓ COMPLETE | 100% | Mood mode (deprecated; replaced by discover) |
 | 7 | ✓ COMPLETE | 100% | Queue manager + auto-advance + release prep |
-| **Overall** | **100%** | | MVP complete: agent-driven music control + taste intelligence + session lanes + Last.fm discovery; public publish deferred |
+| **Overall** | **✓ 100%** | | MVP complete: agent-driven music control + taste intelligence + discovery pipeline + Last.fm; public publish deferred |
 
 ---
 

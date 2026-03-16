@@ -23,11 +23,11 @@ sbotify/
 │   ├── queue/
 │   │   ├── queue-manager.ts          # Queue state management (Phase 7)
 │   │   └── queue-playback-controller.ts # Queue/mpv orchestration (Phase 7)
-│   ├── mood/
-│   │   └── mood-presets.ts           # Mood → search query mapping (Phase 6)
 │   ├── taste/
 │   │   ├── taste-engine.ts           # Taste intelligence + implicit feedback (Phase 4)
-│   │   └── taste-engine.test.ts      # Taste engine unit tests
+│   │   ├── taste-engine.test.ts      # Taste engine unit tests
+│   │   ├── candidate-generator.ts    # 4-lane discovery (continuation, comfort, context-fit, wildcard) (Phase 5)
+│   │   └── candidate-scorer.ts       # 8-term scoring + softmax sampling (Phase 5)
 │   └── history/
 │       ├── history-store.ts          # SQLite play history + session state persistence (Phase 1+)
 │       └── history-schema.ts         # Database schema + track normalization
@@ -131,28 +131,29 @@ interface PlayContext {
 ### `src/mcp/mcp-server.ts` — MCP Protocol
 **Status**: Phase 2+ COMPLETE (expanded to 11 tools)
 
-**Responsibility**: Initialize McpServer, register 11 MCP tool schemas, handle agent requests via stdio.
+**Responsibility**: Initialize McpServer, register MCP tool schemas, handle agent requests via stdio.
 
 **Implementation**:
 - `createMcpServer()`: Async entry; initializes McpServer instance
-- Registers 11 tools with Zod schemas: search, play, play_song, play_mood, pause, resume, skip, queue_add, queue_list, now_playing, volume
+- Registers tools with Zod schemas: search, play, play_song, discover, pause, resume, skip, queue_add, queue_list, now_playing, volume, get_session_state
 - StdioServerTransport for agent communication
-- Mood values now come from `src/mood/mood-presets.ts`; tool schema accepts a string and normalizes in the handler
-- **Phase 2**: New `play_song` tool accepts `title` (required) and optional `artist` for high-accuracy song playback via fuzzy matching
+- **Phase 5**: New `discover` tool uses 4-lane candidate generation + 8-term scoring
+- **Phase 5**: New `get_session_state` tool returns taste profile, agent persona, session lane context
 
-**Tool Definitions** (Phase 2+ complete):
+**Tool Definitions** (Phase 5 current):
 ```
 • search(query, limit?) → {results: [], message: string}
 • play(id) → {nowPlaying: {id, title, artist, duration}, message: string}
-• play_song(title, artist?) → {matched, nowPlaying, matchScore, alternatives} — NEW (Phase 2)
-• play_mood(mood: string) → normalizes mood, selects curated query, auto-plays preset
+• play_song(title, artist?) → {matched, nowPlaying, matchScore, alternatives}
+• discover(mode?, intent?) → {candidates: ScoredCandidate[], modeUsed: string}
 • pause() → {status: "paused", message: string}
 • resume() → {status: "playing", message: string}
 • skip() → {message: string}
-• queue_add(query?, id?) → {added: Track, position: number} — Updated: accepts optional video ID
+• queue_add(query?, id?) → {added: Track, position: number}
 • queue_list() → {queue: Track[]}
 • now_playing() → {nowPlaying: Track | null}
 • volume(level?) → {volume: number}
+• get_session_state() → {taste, persona, sessionLane, recentPlays}
 ```
 
 **Return Structure**: `{content: [{type: "text", text: "..."}], isError?: boolean}` (MCP SDK standard)
@@ -395,23 +396,42 @@ clearForShutdown(): void
   - Stores tags in track record via `updateTrackTags(trackId, tagNames)`
   - Non-blocking: tag fetch happens after playback starts
 
-### `src/mood/mood-presets.ts` — Mood Keywords
-**Status**: Phase 6 COMPLETE
+### `src/taste/candidate-generator.ts` — 4-Lane Discovery
+**Status**: Phase 5 COMPLETE
 
-**Responsibility**: Normalize supported mood input and provide curated YouTube query pools.
+**Responsibility**: Generate track candidates from 4 independent lanes (continuation, comfort, context-fit, wildcard) based on taste context and music intent.
 
-**Supported Moods**:
-- `focus`
-- `energetic`
-- `chill`
-- `debug`
-- `ship`
+**Lanes**:
+- **Continuation**: Similar tracks from Last.fm (current track context)
+- **Comfort**: Most-played tracks from history
+- **Context-fit**: Tracks matching intent tags or session lane tags
+- **Wildcard**: Exploration via similar artists
 
-**Functions**:
+**Discovery Modes**: focus (50% continuation, 30% comfort), balanced (40/30/20/10), explore (20/15/30/35)
+
+**Key Methods**:
 ```typescript
-normalizeMood(input: string): Mood | null
-getMoodQueries(mood: Mood): string[]
-getRandomMoodQuery(mood: Mood): string
+async generate(currentTrack?, intent?, mode = 'balanced'): Promise<Candidate[]>
+```
+
+### `src/taste/candidate-scorer.ts` — 8-Term Scoring
+**Status**: Phase 5 COMPLETE
+
+**Responsibility**: Score candidates using 8 weighted terms + softmax sampling for diversity.
+
+**Scoring Terms** (sum to 1.0):
+- Context match (0.32): fits intent/session lane
+- Taste match (0.24): aligned with artist obsessions
+- Transition quality (0.18): smooth from current track
+- Familiarity fit (0.10): repeat tolerance + callback love
+- Exploration bonus (0.08): novelty appetite
+- Freshness bonus (0.08): never-played bonus
+- Repetition penalty (-0.22): antiMonotony scaling
+- Boredom penalty (-0.18): from taste boredom scores
+
+**Key Methods**:
+```typescript
+score(candidates[], currentTrack?, intent?): ScoredCandidate[]
 ```
 
 ### `src/taste/taste-engine.ts` — Taste Intelligence

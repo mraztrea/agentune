@@ -20,25 +20,28 @@ sbotify is a three-tier system:
 │                                                          │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │  MCP Server (Phase 2)                            │  │
-│  │  ├─ Tool Definitions (search, play, skip, ...)  │  │
+│  │  ├─ Tool Definitions (search, play, discover, ...)  │  │
 │  │  └─ stdio Transport (agent ↔ server)            │  │
 │  └──────────────────────────────────────────────────┘  │
 │          │               │              │       │       │
 │          ▼               ▼              ▼       ▼       │
-│  ┌─────────────┐ ┌─────────────┐ ┌──────────────┐    │
-│  │  YouTube    │ │ Queue       │ │ Mood         │    │
-│  │  Provider   │ │ Manager     │ │ Presets      │    │
-│  │ (Phase 4)   │ │ (Phase 7)   │ │ (Phase 6)    │    │
-│  └─────────────┘ └─────────────┘ └──────────────┘    │
-│          │               │                              │
-│          ├───────┬───────┤        ┌────────────────┐  │
-│          │       │       │        │ Taste Engine   │  │
-│          │       ▼       │        │ (Phase 4)      │  │
-│          │  ┌──────────────────┐  ├─ Implicit      │  │
-│          │  │ Last.fm Provider │  │   feedback     │  │
-│          │  │ (Phase 3)        │  ├─ Session lanes │  │
-│          │  └──────────────────┘  ├─ Agent persona │  │
-│          │       │                 └────────────────┘  │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────────────┐ │
+│  │  YouTube    │ │ Queue       │ │ Discovery        │ │
+│  │  Provider   │ │ Manager     │ │ Pipeline (Ph. 5) │ │
+│  │ (Phase 4)   │ │ (Phase 7)   │ │ ├─ Candidate Gen │ │
+│  └─────────────┘ └─────────────┘ │ └─ Candidate Scr │ │
+│                                  └──────────────────┘ │
+│          │               │              │                │
+│          ├───────┬───────┤              │                │
+│          │       │       │               ┌────────────────┐  │
+│          │       │       │               │ Taste Engine   │  │
+│          │       │       │               │ (Phase 4)      │  │
+│          │       ▼       │               ├─ Implicit      │  │
+│          │  ┌──────────────────┐        │   feedback     │  │
+│          │  │ Last.fm Provider │        ├─ Session lanes │  │
+│          │  │ (Phase 3)        │        ├─ Agent persona │  │
+│          │  └──────────────────┘        └────────────────┘  │
+│          │       │                                            │
 │          └───────┴───────────────────┐                  │
 │                  ▼                    ▼                 │
 │  ┌──────────────────────────────────────────────┐     │
@@ -142,9 +145,13 @@ Tool: queue_list
   Input: {}
   Output: {isError: boolean, nowPlaying: Track | null, queue: Track[], history: Track[]}
 
-Tool: play_mood
-  Input: {mood: string}
-  Output: {isError: boolean, nowPlaying: Track}
+Tool: discover
+  Input: {mode?: "focus"|"balanced"|"explore", intent?: {energy?, valence?, novelty?, allowed_tags?, avoid_tags?}}
+  Output: {isError: boolean, candidates: ScoredCandidate[], modeUsed: string}
+
+Tool: get_session_state
+  Input: {}
+  Output: {isError: boolean, taste: TasteState, persona: AgentPersona, sessionLane: SessionLane | null, recentPlays: TrackRecord[]}
 
 Tool: history
   Input: {limit?: number (1-50, default 20), query?: string}
@@ -355,7 +362,63 @@ getState()     → Snapshot for MCP + dashboard
 
 **Persistence**: All state persisted to `session_state` table on every feedback event (non-blocking)
 
-### 5. Mood Presets (Phase 6)
+### 4.7 Discovery Pipeline (Phase 5) — NEW
+
+**Purpose**: Generate intelligent song suggestions from 4 independent candidate lanes, score with 8-term weighting, and enable agent-driven exploration.
+
+**Components**:
+- **CandidateGenerator**: Produces candidates from 4 lanes (continuation, comfort, context-fit, wildcard)
+- **CandidateScorer**: Ranks candidates using 8 weighted terms + softmax sampling
+
+**Lanes**:
+```
+Continuation  — Similar tracks from Last.fm (current track context)
+Comfort       — Most-played tracks from history (familiar favorites)
+Context-fit   — Tracks matching music intent tags or session lane tags
+Wildcard      — Exploration via similar artists (novelty seeking)
+```
+
+**Discover Modes** (control lane ratios):
+```
+focus   → 50% continuation, 30% comfort (deterministic, low novelty)
+balanced → 40% continuation, 30% comfort, 20% context-fit (default)
+explore  → 20% continuation, 15% comfort, 30% context-fit, 35% wildcard (high novelty)
+```
+
+**Scoring Formula** (8 weighted terms sum to 1.0):
+```
++0.32 context_match      — Fits music intent or session lane
++0.24 taste_match        — Aligned with artist obsessions
++0.18 transition_quality — Smooth from current track
++0.10 familiarity_fit    — Repeat tolerance + callback love
++0.08 exploration_bonus  — Novelty appetite + persona curiosity
++0.08 freshness_bonus    — Never-played bonus (1/(1+playCount))
+-0.22 repetition_penalty — Recently played, scaled by antiMonotony
+-0.18 boredom_penalty    — From taste boredom scores
+```
+
+**Data Flow**:
+```
+Agent calls get_session_state() → understand taste context
+  ↓
+Agent constructs optional MusicIntent {energy, valence, novelty, allowed_tags, avoid_tags}
+  ↓
+Agent calls discover(mode, intent) → CandidateGenerator produces 4 lanes
+  ↓
+CandidateScorer ranks candidates (8-term formula) → returns ScoredCandidate[]
+  ↓
+Agent selects candidate → calls play(id) or play_song(title, artist)
+  ↓
+TasteEngine.processFeedback() on finish/skip → updates taste state for next discovery cycle
+```
+
+**Integration with Taste Engine**:
+- Uses taste obsessions + boredom for scoring weights
+- Uses agent persona (curiosity, antiMonotony, callbackLove) for term application
+- Uses session lane tags for context matching
+- Feeds play/skip events back into taste state via queue playback controller
+
+### 5. Mood Presets (Phase 6) — DEPRECATED
 
 **Purpose**: Map mood keywords to YouTube search queries.
 
@@ -374,7 +437,9 @@ getMoodQueries(mood: Mood): string[]
 getRandomMoodQuery(mood: Mood): string
 ```
 
-**Integration**: Agent calls `play_mood("focus")` → normalize mood → pick random curated query → search YouTube → play first result → include `mood` in playback metadata for dashboard state.
+**Status**: Deprecated in Phase 5; functionality replaced by discovery pipeline.
+
+**Integration**: Still available for backward compatibility; `play_mood("focus")` normalizes mood → picks random curated query → searches YouTube → plays first result. However, new agent workflows should use `discover()` for intelligent recommendations.
 
 ### 6. Web Server (Phase 5) ✓ COMPLETE
 
@@ -385,7 +450,7 @@ getRandomMoodQuery(mood: Mood): string
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | / | Serve index.html |
-| GET | /api/status | JSON: {playing, title, artist, thumbnail, position, duration, volume, muted, queue, mood} |
+| GET | /api/status | JSON: {playing, title, artist, thumbnail, position, duration, volume, muted, queue, context} |
 | POST | /api/volume | Set volume (body: {volume: 0-100}) |
 | WS | /ws | Real-time push: state updates + volume/mute commands |
 
@@ -396,7 +461,7 @@ getRandomMoodQuery(mood: Mood): string
 
 **WebSocket Server**:
 - Broadcast playback updates on mpv state changes plus a 1-second position refresh
-- Send: `{type: "state", data: {playing, title, artist, thumbnail, position, duration, volume, muted, queue, mood}}`
+- Send: `{type: "state", data: {playing, title, artist, thumbnail, position, duration, volume, muted, queue, context}}`
 - Accept: `{type: "volume", level}` and `{type: "mute"}` from browser clients
 - Push current state immediately on connect
 
@@ -406,60 +471,56 @@ getRandomMoodQuery(mood: Mood): string
 - Volume slider (0-100)
 - Mute toggle
 - Queue preview reflects live queue manager state
-- Mood badge reflects current track mood metadata when playback starts from `play_mood`
+- Context badge reflects current track context (e.g., session lane tag info)
 - Auto-refresh on data change
 - Auto-opens in the default browser on first successful `play`
 
-### Data Flow Example: "Play focus music"
+### Data Flow Example: Intelligent Discovery
 
 ```
-1. Agent sends MCP tool call: {tool: "play_mood", input: {mood: "focus"}}
-   └─ MCP Server receives on stdio
+1. Agent calls get_session_state() to understand current taste + session context
+   ├─ Taste Engine returns: obsessions, boredom, cravings, novelty appetite, repeat tolerance
+   ├─ Agent Persona returned: curiosity, dramaticTransition, callbackLove, antiMonotony
+   ├─ Session Lane returned: current tag context (e.g., "dark minimal instrumental")
+   └─ Recent 5 plays with completion metrics returned
 
-2. MCP Server invokes play_mood("focus")
-   ├─ Mood Presets: getMoodQuery("focus") → "lofi hip hop beats to study to"
-   └─ Invoke: search("lofi hip hop beats to study to")
+2. Agent optionally constructs a MusicIntent
+   ├─ Intent: {energy?: 0–1, valence?: 0–1, novelty?: 0–1, allowed_tags?, avoid_tags?}
+   └─ Or calls discover() with no intent (uses session lane as context)
 
-3. YouTube Provider: search()
-   ├─ @distube/ytsr fetches results
-   ├─ Returns: [{videoId: "abc123", title: "Lofi Beats...", ...}]
-   └─ MCP invokes: play("abc123")
+3. Agent calls discover(mode: "balanced", intent: {...})
+   ├─ MCP Server creates CandidateGenerator + CandidateScorer
 
-4. MCP Server invokes play("abc123")
-   ├─ YouTube Provider: getStreamUrl("abc123")
-   │  └─ Returns m3u8 URL from cache or yt-dlp
-   ├─ Queue Playback Controller sets Queue Manager nowPlaying state
-   ├─ History Store: recordPlay({title: "Lofi Beats...", ...}, {mood: "focus"})
-   │  └─ Inserts play event into SQLite; increments track play_count
-   ├─ mpv Controller: playback (JSON IPC)
-   │  └─ Send: {command: ["loadfile", "https://stream.m3u8"]}
-   ├─ Last.fm Provider: async tag enrichment (fire-and-forget after playback starts)
-   │  └─ getTopTags("Lofi Beats", "...") → store tags via updateTrackTags()
-   └─ Return: {isError: false, nowPlaying: {title: "Lofi Beats...", ...}}
+4. CandidateGenerator produces 4 lanes of candidates
+   ├─ Lane A (Continuation): Similar tracks from Last.fm (current track context)
+   ├─ Lane B (Comfort): Most-played tracks from history
+   ├─ Lane C (Context-fit): Tracks matching intent.allowed_tags or session lane tags
+   ├─ Lane D (Wildcard): Exploration via similar artists
+   └─ Deduplicates + filters intent.avoid_tags
 
-5. MCP returns result to agent on stdout
-   └─ Agent: "Playing Lofi Beats..."
+5. CandidateScorer scores candidates using 8 weighted terms
+   ├─ Context match (0.32): fits intent/session lane
+   ├─ Taste match (0.24): artist obsessions
+   ├─ Transition quality (0.18): smooth from current track
+   ├─ Familiarity fit (0.10): repeat tolerance + callback love
+   ├─ Exploration bonus (0.08): novelty appetite
+   ├─ Freshness bonus (0.08): never-played bonus
+   ├─ Repetition penalty (-0.22): antiMonotony scaling
+   └─ Boredom penalty (-0.18): artist boredom scores
 
-6. mpv plays audio (headless, independent)
+6. Softmax sampling with mode-based temperature
+   ├─ focus mode: temp=0.3 (deterministic, top candidates)
+   ├─ balanced mode: temp=0.7 (default)
+   ├─ explore mode: temp=1.2 (high entropy, more diversity)
+   └─ Returns top-k candidates with scores + reasons
 
-7. On track finish or skip:
-   ├─ History Store: updatePlay(playId, {played_sec: 243, skipped: false})
-   │  └─ Records completion time and skip status
-   └─ Queue advances to next track (if queued)
+7. Agent selects a candidate and calls play(id) or play_song(title, artist)
+   ├─ YouTube Provider resolves to stream URL
+   ├─ Queue Playback Controller: recordPlay() + updatePlay() on finish
+   ├─ Taste Engine: processFeedback() on skip/finish (updates taste state)
+   └─ Dashboard updates in real-time via WebSocket
 
-8. Web Server publishes status via WebSocket
-   ├─ Browser receives: {type: "state", data: {...}}
-   ├─ Dashboard updates:
-   │  ├─ Title: "Lofi Beats..."
-   │  ├─ Progress: 0:00
-   │  └─ Queue: live upcoming tracks
-   └─ User sees now-playing info in real-time
-
-9. Agent queries history:
-   ├─ Calls: {tool: "history", input: {limit: 10}}
-   ├─ History Store: getRecent(10)
-   │  └─ Returns plays with track stats (play_count, avgCompletion, skipRate)
-   └─ Agent receives: array of recent plays with metrics
+8. User sees now-playing info + session lane context in browser
 ```
 
 ## Concurrency Model

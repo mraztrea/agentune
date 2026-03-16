@@ -7,7 +7,7 @@ sbotify is a Model Context Protocol (MCP) server that enables coding agents (Cla
 ## Features
 
 - **Agent-driven music control**: Search, play, skip, queue songs via MCP protocol
-- **Mood-based playlists**: "chill" mode, "focus" mode, "energetic" mode auto-generate curated queries
+- **Discovery pipeline**: 4-lane intelligent suggestions (continuation, comfort, context-fit, wildcard) with 8-term scoring
 - **Browser dashboard**: Real-time now-playing info + volume slider on localhost:3737
 - **Headless playback**: Audio plays independently via mpv (no browser needed)
 - **Cross-platform**: Works on Windows, macOS, Linux
@@ -75,7 +75,7 @@ Open http://localhost:3737 in your browser to see:
 - Now-playing track (title, artist, progress)
 - Volume slider
 - Live queue preview
-- Active mood badge when playback starts from `play_mood`
+- Session lane info (current tag context)
 
 ## Architecture Overview
 

@@ -1,6 +1,7 @@
 // YouTube search + audio URL extraction via @distube/ytsr and yt-dlp
 
-import ytsr, { Video } from '@distube/ytsr';
+import fs from 'node:fs';
+import type { Video } from '@distube/ytsr';
 import { youtubeDl } from 'youtube-dl-exec';
 
 export interface SearchResult {
@@ -21,6 +22,41 @@ export interface AudioInfo {
   thumbnail: string;
 }
 
+type YtsrSearch = (
+  query: string,
+  options?: { limit?: number; safeSearch?: boolean },
+) => Promise<{ items: Video[] }>;
+
+let ytsrModulePromise: Promise<YtsrSearch> | null = null;
+let ytsrCompatPatched = false;
+
+function ensureYtsrNode25Compatibility(): void {
+  if (ytsrCompatPatched) return;
+
+  const fsCompat = fs as typeof fs & {
+    rmdirSync(path: fs.PathLike, options?: { recursive?: boolean; maxRetries?: number; retryDelay?: number }): void;
+  };
+  const originalRmdirSync = fsCompat.rmdirSync.bind(fsCompat) as (...args: unknown[]) => void;
+
+  fsCompat.rmdirSync = ((path: fs.PathLike, options?: { recursive?: boolean; maxRetries?: number; retryDelay?: number }) => {
+    const recursive = typeof options === 'object' && options !== null && 'recursive' in options && options.recursive === true;
+    if (recursive) {
+      const { recursive: _recursive, ...rest } = options;
+      fs.rmSync(path, { ...rest, recursive: true });
+      return;
+    }
+    return originalRmdirSync(path, options);
+  }) as typeof fsCompat.rmdirSync;
+
+  ytsrCompatPatched = true;
+}
+
+async function loadYtsr(): Promise<YtsrSearch> {
+  ensureYtsrNode25Compatibility();
+  ytsrModulePromise ??= import('@distube/ytsr').then((module) => ((module as { default?: unknown }).default ?? module) as YtsrSearch);
+  return ytsrModulePromise;
+}
+
 // Parse "3:45" or "1:02:30" duration string to milliseconds
 function parseDuration(duration: string): number {
   const parts = duration.split(':').map(Number);
@@ -39,6 +75,8 @@ function parseDuration(duration: string): number {
 export class YouTubeProvider {
   async search(query: string, limit = 5): Promise<SearchResult[]> {
     if (!query.trim()) return [];
+
+    const ytsr = await loadYtsr();
 
     // Fetch extra results to account for non-video items filtered out
     const results = await ytsr(query, { limit: limit + 5, safeSearch: true });

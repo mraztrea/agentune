@@ -44,7 +44,7 @@ export interface CanonicalOverride {
 }
 
 export interface PlayContext {
-  mood?: string;
+  context?: string;
   source?: string;
   [key: string]: unknown;
 }

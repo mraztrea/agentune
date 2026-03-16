@@ -2,10 +2,11 @@
 
 import { getMpvController } from '../audio/mpv-controller.js';
 import { getHistoryStore } from '../history/history-store.js';
-import type { Mood } from '../mood/mood-presets.js';
-import { getRandomMoodQuery, getMoodQueries, MOOD_VALUES, normalizeMood } from '../mood/mood-presets.js';
+import { getLastFmProvider } from '../providers/lastfm-provider.js';
 import { scoreSearchResults } from '../providers/search-result-scorer.js';
 import { getYoutubeProvider } from '../providers/youtube-provider.js';
+import { CandidateGenerator, type MusicIntent } from '../taste/candidate-generator.js';
+import { CandidateScorer, TEMPERATURE } from '../taste/candidate-scorer.js';
 import { getTasteEngine } from '../taste/taste-engine.js';
 import { getQueuePlaybackController } from '../queue/queue-playback-controller.js';
 import { getQueueManager } from '../queue/queue-manager.js';
@@ -21,14 +22,13 @@ function errorResult(message: string): ToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
-async function playResolvedTrack(id: string, extraMeta?: { mood?: Mood; canonicalArtist?: string; canonicalTitle?: string }): Promise<{
+async function playResolvedTrack(id: string, extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string }): Promise<{
   meta: {
     id: string;
     title: string;
     artist: string;
     duration: number;
     thumbnail: string;
-    mood?: Mood;
   };
 }> {
   const queuePlaybackController = getQueuePlaybackController();
@@ -142,34 +142,56 @@ export async function handlePlaySong(args: { title: string; artist?: string }): 
   }
 }
 
-export async function handlePlayMood(args: { mood: string }): Promise<ToolResult> {
+export async function handleDiscover(args: { mode?: string; intent?: MusicIntent }): Promise<ToolResult> {
   try {
-    const mood = normalizeMood(args.mood);
-    if (!mood) {
-      return errorResult(`Unknown mood "${args.mood}". Available moods: ${MOOD_VALUES.join(', ')}.`);
+    const taste = getTasteEngine();
+    if (!taste) return errorResult('Taste engine not initialized.');
+    const store = getHistoryStore();
+    if (!store) return errorResult('History store not initialized.');
+
+    const mode = (args.mode ?? 'balanced') as 'focus' | 'balanced' | 'explore';
+
+    const lastFm = getLastFmProvider();
+    const generator = new CandidateGenerator(lastFm, store, taste);
+    const scorer = new CandidateScorer(taste, store);
+
+    // Get current track for continuation lane
+    const queueManager = getQueueManager();
+    const nowPlaying = queueManager?.getNowPlaying() ?? null;
+    const currentTrack = nowPlaying
+      ? { artist: nowPlaying.artist, title: nowPlaying.title, duration: nowPlaying.duration }
+      : null;
+
+    const candidates = await generator.generate(currentTrack, args.intent, mode);
+    if (candidates.length === 0) {
+      return textResult({
+        suggestions: [],
+        message: 'No candidates found. Try playing a track first so discover has context to work with.',
+      });
     }
 
-    const yt = getYoutubeProvider();
-    if (!yt) return errorResult('YouTube provider not initialized.');
+    const scored = scorer.score(candidates, currentTrack, args.intent);
+    const temperature = TEMPERATURE[mode];
+    const suggestions = scorer.topKSample(scored, 5, temperature);
 
-    const query = getRandomMoodQuery(mood);
-    const results = await yt.search(query, 1);
-    if (results.length === 0) {
-      return errorResult(`No results found for mood "${mood}" using query "${query}".`);
-    }
-
-    const topResult = results[0];
-    const { meta } = await playResolvedTrack(topResult.id, { mood });
+    const lane = taste.getSessionLane();
 
     return textResult({
-      mood,
-      query,
-      availableQueries: getMoodQueries(mood),
-      nowPlaying: meta,
-      message: `Playing ${meta.title} for ${mood} mood.`,
+      basedOn: currentTrack ? { title: currentTrack.title, artist: currentTrack.artist } : null,
+      mode,
+      suggestions: suggestions.map(s => ({
+        title: s.title,
+        artist: s.artist,
+        score: s.score,
+        source: s.source,
+        reasons: s.reasons,
+        hint: `play_song({ title: '${s.title.replace(/'/g, "\\'")}', artist: '${s.artist.replace(/'/g, "\\'")}' })`,
+      })),
+      lane: lane ? { description: lane.description, songCount: lane.songCount } : null,
+      tip: 'Pick one and use play_song(). Call discover() again after a few tracks.',
     });
   } catch (err) {
-    return errorResult(`Play mood failed: ${(err as Error).message}`);
+    return errorResult(`Discover failed: ${(err as Error).message}`);
   }
 }
 

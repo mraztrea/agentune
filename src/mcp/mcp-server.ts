@@ -3,12 +3,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { MOOD_VALUES } from "../mood/mood-presets.js";
 import {
   handleSearch,
   handlePlay,
   handlePlaySong,
-  handlePlayMood,
+  handleDiscover,
   handlePause,
   handleResume,
   handleSkip,
@@ -53,19 +52,30 @@ export async function createMcpServer(): Promise<McpServer> {
     "Always include artist for accuracy. " +
     "The resolver validates title/artist match and prefers official audio versions.",
     {
-      title: z.string().min(1).describe("Song title, e.g. 'Says' or 'Bohemian Rhapsody'"),
-      artist: z.string().optional().describe("Artist name, e.g. 'Nils Frahm' — strongly recommended for accuracy"),
+      title: z.string().min(1).describe("Song title"),
+      artist: z.string().optional().describe("Artist name — strongly recommended for accuracy"),
     },
     async (args) => handlePlaySong(args),
   );
 
   server.tool(
-    "play_mood",
-    "Play music matching a mood preset",
+    "discover",
+    "Get intelligent song suggestions based on your taste and current session. " +
+    "Call get_session_state() first to understand your taste, then optionally pass a music intent. " +
+    "Returns scored candidates from 4 sources: continuation, comfort, context-fit, wildcard. " +
+    "Pick from suggestions and use play_song() to play your choice.",
     {
-      mood: z.string().min(1).describe(`Mood preset: ${MOOD_VALUES.join(', ')}`),
+      mode: z.enum(["focus", "balanced", "explore"]).optional().default("balanced")
+        .describe("focus=predictable, balanced=default, explore=adventurous"),
+      intent: z.object({
+        energy: z.number().min(0).max(1).optional().describe("0=calm, 1=energetic"),
+        valence: z.number().min(0).max(1).optional().describe("0=dark, 1=bright"),
+        novelty: z.number().min(0).max(1).optional().describe("0=familiar, 1=new"),
+        allowed_tags: z.array(z.string()).optional().describe("Tags to favor"),
+        avoid_tags: z.array(z.string()).optional().describe("Tags to avoid"),
+      }).optional().describe("Music intent — omit to auto-infer from taste state"),
     },
-    async (args) => handlePlayMood(args),
+    async (args) => handleDiscover(args),
   );
 
   server.tool(
