@@ -1,5 +1,42 @@
 # Project Changelog
 
+## 2026-03-17 (Singleton Daemon + Stdio Proxy)
+
+### Daemon Architecture for Stateful Session Sharing
+- Added `src/daemon/pid-manager.ts` — Manage PID file at `~/.sbotify/daemon.pid` for inter-process discovery
+- Added `src/daemon/health-endpoint.ts` — `/health` HTTP endpoint for daemon readiness polling
+- Added `src/daemon/daemon-server.ts` — HTTP server on port 3747 with `/health`, `/mcp`, `/shutdown` routes
+  - Mounts `StreamableHTTPServerTransport` from MCP SDK for stateful session management
+  - Each proxy client gets unique `Mcp-Session-Id` header
+  - Shares tool handlers with stdio transport (same singleton accessors)
+- Added `src/proxy/daemon-launcher.ts` — Auto-spawn detached daemon if not running; poll health endpoint for readiness
+- Added `src/proxy/stdio-proxy.ts` — Default proxy mode: stdio↔HTTP relay using MCP SDK client/server transports
+- Added `src/cli/status-command.ts` — `sbotify status` subcommand to print daemon info
+- Added `src/cli/stop-command.ts` — `sbotify stop` subcommand to POST `/shutdown` to daemon
+- Updated `src/index.ts` — CLI routing: `--daemon` mode, `status` subcommand, `stop` subcommand, default proxy mode
+- Updated `src/mcp/mcp-server.ts` — Extracted `registerMcpTools()` to share tool definitions between stdio and HTTP transports
+- Updated `docs/system-architecture.md` — New "Daemon Architecture" section with proxy pattern diagram and mode documentation
+- Updated `docs/codebase-summary.md` — New daemon/, proxy/, cli/ module documentation; updated src/ directory structure
+
+### Architecture Benefits
+- Single daemon per device (stateful: 1 mpv, 1 queue, 1 taste engine, 1 web server)
+- Multiple agents can connect via proxy; all share playback state
+- Daemon auto-starts on first proxy invocation (seamless experience)
+- PID file enables proxy port discovery without hardcoding
+- `/health` endpoint + polling ensures daemon readiness before relaying requests
+- Graceful shutdown via `/shutdown` endpoint
+
+### Test Results
+- All 107 unit tests passing
+- Code review score: 7.5/10 (all high-priority issues fixed)
+- Build clean: `npm run build` produces dist/ with no errors
+
+### Known Considerations
+- PID file at `~/.sbotify/daemon.pid` is single source of truth for proxy discovery
+- Daemon port (3747) separate from web dashboard (3737) to avoid conflicts
+- Proxy is completely stateless; all logic in daemon singleton
+- Multiple proxies can connect to same daemon; state is shared (not isolated per-session)
+
 ## 2026-03-16 (Apple-First MCP Flow)
 
 ### Discovery-First Public Tool Surface

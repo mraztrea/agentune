@@ -577,6 +577,55 @@ getRandomMoodQuery(mood: Mood): string
 - Windows: npm creates wrapper .cmd script
 - macOS/Linux: Symlink to executable script
 
+## Daemon Architecture (Singleton Daemon + Proxy Pattern)
+
+One device = One sbotify daemon. All agent sessions share state via stdio-to-HTTP proxy.
+
+```
+Agent 1 ──stdio──> sbotify (proxy) ──HTTP──╮
+Agent 2 ──stdio──> sbotify (proxy) ──HTTP──┼──> sbotify --daemon (singleton)
+Agent 3 ──────────────HTTP /mcp────────────╯     ├─ mpv (1 process)
+Browser ──HTTP :3737──────────────────────────────├─ queue + taste (shared)
+                                                   ├─ web dashboard :3737
+                                                   ├─ /mcp on :3747 (Streamable HTTP)
+                                                   ├─ /health on :3747
+                                                   └─ SQLite history
+```
+
+### Proxy Mode (Default)
+- `sbotify` command (no args) starts in proxy mode
+- Connects via stdio transport to agent
+- Auto-starts daemon if not running (spawn `sbotify --daemon` as detached child)
+- Reads JSON-RPC from stdin, forwards to daemon HTTP API
+- Pure relay: no singletons, no mpv, no database
+
+### Daemon Mode (`sbotify --daemon`)
+- Initializes all components: history store, taste engine, queue, providers, mpv, web server
+- HTTP server on port 3747 mounts:
+  - `/health` — health check (200 + uptime info)
+  - `/mcp` — Streamable HTTP MCP transport (POST tool calls, GET SSE notifications, DELETE session close)
+  - `/shutdown` — graceful daemon shutdown
+- PID file at `~/.sbotify/daemon.pid` with port info (enables proxy discovery)
+- Logs to `~/.sbotify/daemon.log`
+
+### PID Manager
+- `src/daemon/pid-manager.ts` — Manages `~/.sbotify/daemon.pid`
+- Reads port from PID file for proxy HTTP connection
+- Auto-cleanup on SIGINT/SIGTERM
+
+### Health Endpoint
+- `src/daemon/health-endpoint.ts` — Responds with `{status: "ok", pid, uptime_sec}`
+- Proxy uses health check to verify daemon readiness before proxying requests
+
+### CLI Commands
+- `sbotify status` — Print daemon info (running/stopped, PID, port, uptime) to stderr
+- `sbotify stop` — POST to daemon `/shutdown` endpoint
+
+### Session Management
+- Each proxy/client gets unique `Mcp-Session-Id` header
+- Daemon's `StreamableHTTPServerTransport` maintains separate sessions
+- Multiple agents can connect simultaneously; tool state shared (single mpv, single queue, single taste engine)
+
 ## Scalability & Limits
 
 **Single-Instance Limits**:

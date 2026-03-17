@@ -57,6 +57,85 @@ Phase 1 (Setup)
 - Phase 7 completed: Real queue playback, history, auto-advance, and release-prep files
 - Public npm publish remains deferred by user request
 
+## Singleton Daemon + Stdio Proxy (COMPLETE)
+
+**Status**: ✓ COMPLETE (Mar 17)
+
+**Objectives**:
+- [x] Implement daemon mode: `sbotify --daemon` starts all components but skips stdio MCP
+- [x] PID manager: Read/write `~/.sbotify/daemon.pid` with port metadata
+- [x] Health endpoint: `/health` returns `{status: "ok", pid, uptime_sec}`
+- [x] HTTP MCP transport: Mount `StreamableHTTPServerTransport` on port 3747
+- [x] Proxy mode: Default `sbotify` becomes stdio↔HTTP relay with daemon auto-start
+- [x] CLI commands: `sbotify status` and `sbotify stop` subcommands
+- [x] Session management: Each proxy client gets unique `Mcp-Session-Id` header
+- [x] Graceful shutdown: `/shutdown` endpoint for daemon termination
+
+**Deliverables**:
+- [x] `src/daemon/pid-manager.ts` — PID file read/write/validate
+- [x] `src/daemon/health-endpoint.ts` — Health check handler
+- [x] `src/daemon/daemon-server.ts` — HTTP server with `/health`, `/mcp`, `/shutdown` routes
+- [x] `src/proxy/daemon-launcher.ts` — Spawn detached daemon + health polling
+- [x] `src/proxy/stdio-proxy.ts` — Stdio↔HTTP relay (default mode)
+- [x] `src/cli/status-command.ts` — Status subcommand
+- [x] `src/cli/stop-command.ts` — Stop subcommand
+- [x] Updated `src/index.ts` — CLI routing + daemon/proxy mode dispatch
+- [x] Updated `src/mcp/mcp-server.ts` — Extracted `registerMcpTools()` for transport reuse
+- [x] Updated `docs/system-architecture.md` — Daemon architecture section + diagram
+- [x] Updated `docs/codebase-summary.md` — New daemon/, proxy/, cli/ modules
+
+**Key Design**:
+```
+1 Device = 1 Daemon (stateful: mpv, queue, taste, web server on :3737)
+           + N Proxies (stateless stdio↔HTTP relays, auto-launch daemon)
+
+PID File enables proxy to discover daemon port without hardcoding
+Health endpoint ensures daemon readiness before request relay
+Multiple agents can connect via proxy; all share state (intended behavior)
+```
+
+**Architecture**:
+```
+Agent 1 ──stdio──> proxy ──HTTP──┐
+Agent 2 ──stdio──> proxy ──HTTP──┼──> daemon (:3747)
+Agent 3 ──HTTP────────────────────┘     ├─ mpv + queue + taste (shared)
+Browser ──HTTP :3737────────────────────├─ web dashboard
+                                        └─ SQLite history
+```
+
+**Test Results**:
+- All 107 unit tests passing
+- Code review: 7.5/10 (all high-priority items fixed)
+- Build clean
+
+**Files Created/Modified**:
+- [x] `src/daemon/pid-manager.ts` (57 LOC)
+- [x] `src/daemon/health-endpoint.ts` (33 LOC)
+- [x] `src/daemon/daemon-server.ts` (~90 LOC)
+- [x] `src/proxy/daemon-launcher.ts` (63 LOC)
+- [x] `src/proxy/stdio-proxy.ts` (53 LOC)
+- [x] `src/cli/status-command.ts` (27 LOC)
+- [x] `src/cli/stop-command.ts` (24 LOC)
+- [x] `src/index.ts` (CLI routing)
+- [x] `src/mcp/mcp-server.ts` (extracted registerMcpTools)
+
+**Success Criteria**:
+- [x] Daemon starts with `--daemon` flag
+- [x] PID file created + removed on shutdown
+- [x] Health check responds < 50ms
+- [x] HTTP MCP transport accepts tool calls from multiple clients
+- [x] Proxy auto-starts daemon on first invocation
+- [x] Status + stop commands work correctly
+- [x] All tests pass; code compiles clean
+- [x] Single daemon mode works (one device = one daemon)
+
+**Next Steps**:
+- Document daemon usage in README
+- Consider persistent queue (v0.2)
+- Monitor daemon stability in production use
+
+---
+
 ## Phase 5.5: Discovery Pipeline (COMPLETE)
 
 **Status**: ✓ COMPLETE (Mar 16)
@@ -856,7 +935,7 @@ export class QueueManager {
 
 ## Progress Tracking
 
-**Last Updated**: Mar 16, 2026 (Phase 5.5 Discovery Pipeline; Phase 4 Taste Intelligence + Session Lanes; Phase 3.5 Last.fm provider; Phase 2 Smart Play; Phases 1, 1+, 5, 6, 7 complete; publish deferred)
+**Last Updated**: Mar 17, 2026 (Singleton Daemon + Stdio Proxy complete; Phase 5.5 Discovery Pipeline; Phase 4 Taste Intelligence + Session Lanes; Phases 1–7 complete; publish deferred)
 
 | Phase | Status | % Complete | Notes |
 |-------|--------|-----------|-------|
@@ -864,13 +943,14 @@ export class QueueManager {
 | 1+ | ✓ COMPLETE | 100% | SQLite history + history MCP tool |
 | 2 | ✓ COMPLETE | 100% | McpServer + tools; play_song with search-result-scorer |
 | 3 | ✓ COMPLETE | 100% | MpvController + cross-platform IPC |
-| 3.5 | ✓ COMPLETE | 100% | Last.fm provider + 7-day SQLite cache |
+| 3.5 | ✓ COMPLETE | 100% | Apple Search + Smart Search providers (replaced Last.fm; zero API keys) |
 | 4 | ✓ COMPLETE | 100% | YouTubeProvider + TasteEngine with implicit feedback + session lanes |
 | 5 | ✓ COMPLETE | 100% | Web server + WebSocket dashboard |
 | 5.5 | ✓ COMPLETE | 100% | Discovery pipeline: 4-lane generation + 8-term scoring; play_mood deprecated |
 | 6 | ✓ COMPLETE | 100% | Mood mode (deprecated; replaced by discover) |
 | 7 | ✓ COMPLETE | 100% | Queue manager + auto-advance + release prep |
-| **Overall** | **✓ 100%** | | MVP complete: agent-driven music control + taste intelligence + discovery pipeline + Last.fm; public publish deferred |
+| **Daemon** | ✓ COMPLETE | 100% | Singleton daemon + stdio proxy + CLI commands (status, stop) |
+| **Overall** | **✓ 100%** | | MVP + daemon: agent-driven music control + taste intelligence + discovery + daemon singleton; public publish deferred |
 
 ---
 

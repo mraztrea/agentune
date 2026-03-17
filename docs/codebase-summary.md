@@ -15,7 +15,21 @@ sbotify/
 │   ├── types/
 │   │   └── node-mpv.d.ts             # Type declarations for node-mpv (Phase 3) ✓
 │   ├── providers/
-│   │   └── youtube-provider.ts       # YouTube search + stream extraction (Phase 4)
+│   │   ├── youtube-provider.ts       # YouTube search + stream extraction (Phase 4)
+│   │   ├── apple-search-provider.ts  # Apple iTunes Search API (Phase 1)
+│   │   ├── smart-search-provider.ts  # Smart Search ytsr-based discovery (Phase 1)
+│   │   ├── metadata-normalizer.ts    # YouTube metadata cleanup utility (Phase 1)
+│   │   └── search-result-scorer.ts   # Fuzzy-match YouTube result scoring (Phase 2)
+│   ├── daemon/
+│   │   ├── pid-manager.ts            # PID file management + port discovery
+│   │   ├── health-endpoint.ts        # Health check handler
+│   │   └── daemon-server.ts          # HTTP server for daemon mode with /mcp transport
+│   ├── proxy/
+│   │   ├── daemon-launcher.ts        # Spawn detached daemon + readiness polling
+│   │   └── stdio-proxy.ts            # Stdio↔HTTP proxy relay (default mode)
+│   ├── cli/
+│   │   ├── status-command.ts         # `sbotify status` subcommand
+│   │   └── stop-command.ts           # `sbotify stop` subcommand
 │   ├── web/
 │   │   ├── state-broadcaster.ts      # Dashboard playback snapshots (Phase 5)
 │   │   ├── web-server.ts             # HTTP + WebSocket server (Phase 5)
@@ -101,14 +115,111 @@ interface PlayContext {
 
 **Responsibility**: SQLite table definitions, indexes, and track normalization helper.
 
+### `src/daemon/pid-manager.ts` — PID File Management
+**Status**: Singleton Daemon COMPLETE
+
+**Responsibility**: Manage `~/.sbotify/daemon.pid` file for inter-process communication between proxy and daemon. Enables proxy to discover daemon port without hardcoding.
+
+**Key Functions**:
+```typescript
+writePidFile(pid: number, port: number): void
+readPidFile(): {pid, port, started} | null
+removePidFile(): void
+```
+
+### `src/daemon/health-endpoint.ts` — Health Check Handler
+**Status**: Singleton Daemon COMPLETE
+
+**Responsibility**: HTTP handler for `/health` endpoint. Responds with daemon uptime and readiness status.
+
+**Response**: `{status: "ok", pid, uptime_sec}`
+
+### `src/daemon/daemon-server.ts` — Daemon HTTP Server
+**Status**: Singleton Daemon COMPLETE
+
+**Responsibility**: HTTP server on port 3747 that mounts `/health`, `/mcp` (Streamable HTTP MCP transport), and `/shutdown` endpoints.
+
+**Key Routes**:
+- `GET /health` → health check
+- `POST /mcp` → JSON-RPC tool calls
+- `GET /mcp` → SSE notifications
+- `DELETE /mcp` → session close
+- `POST /shutdown` → graceful shutdown
+
+**Implementation**:
+- Uses `StreamableHTTPServerTransport` from MCP SDK for stateful session management
+- Each proxy client gets unique `Mcp-Session-Id` header
+- Shares tool handlers with stdio transport (same `get*()` singletons)
+
+### `src/proxy/daemon-launcher.ts` — Daemon Auto-Start
+**Status**: Singleton Daemon COMPLETE
+
+**Responsibility**: Spawn detached daemon process if not running. Poll health endpoint for readiness.
+
+**Key Functions**:
+```typescript
+ensureDaemon(): Promise<{port, pid}>
+```
+
+**Behavior**:
+- Reads PID file + hits `/health` endpoint
+- If daemon not running, spawns `sbotify --daemon` as detached child
+- Polls health endpoint every 200ms (10s timeout)
+- Returns daemon port once ready
+
+### `src/proxy/stdio-proxy.ts` — Stdio↔HTTP Relay
+**Status**: Singleton Daemon COMPLETE
+
+**Responsibility**: Default `sbotify` command mode. Lightweight proxy that relays MCP JSON-RPC between stdin and daemon HTTP API.
+
+**Key Functions**:
+```typescript
+export async function startProxy(): Promise<void>
+```
+
+**Behavior**:
+- Calls `ensureDaemon()` to verify/start daemon
+- Creates `StreamableHTTPClientTransport` to daemon `/mcp`
+- Creates `StdioServerTransport` for agent communication
+- Wires request handlers to forward tool calls to HTTP client
+- Exits when stdin closes (agent disconnects)
+
+**Design**: Stateless relay; all state lives in daemon singleton.
+
+### `src/cli/status-command.ts` — Status Subcommand
+**Status**: Singleton Daemon COMPLETE
+
+**Responsibility**: `sbotify status` CLI command. Print daemon info to stderr.
+
+**Output**:
+```
+Daemon is running
+  PID: 12345
+  Port: 3747
+  Uptime: 45s
+```
+
+### `src/cli/stop-command.ts` — Stop Subcommand
+**Status**: Singleton Daemon COMPLETE
+
+**Responsibility**: `sbotify stop` CLI command. Send `/shutdown` POST to daemon.
+
+**Behavior**:
+- Reads PID file
+- POSTs to `http://127.0.0.1:{port}/shutdown`
+- Daemon performs graceful shutdown + removes PID file
+
 ### `src/index.ts` — Entry Point
 **Status**: Phase 3 UPDATE COMPLETE (Updated Phase 1)
 
-**Responsibility**: Bootstrap server, initialize all subsystems, handle graceful shutdown.
+**Responsibility**: CLI routing and bootstrap. Routes to daemon mode, proxy mode, or subcommands. Initializes all subsystems.
 
 **Key Functions**:
-- `main()`: Async entry; initializes history store (SQLite), discovery providers (Apple + Smart Search), queue, YouTube provider, mpv controller, browser dashboard, MCP server
-- `shutdown(signal)`: Handles SIGINT/SIGTERM; clears queue playback orchestration, closes history DB, destroys web server, then destroys mpv
+- `parseCli(argv)`: Parse command-line args; returns mode (daemon | proxy | subcommand)
+- `main()`: Async entry for proxy/daemon; initializes history store (SQLite), discovery providers (Apple + Smart Search), queue, YouTube provider, mpv controller, browser dashboard, MCP server (when not proxy)
+- `startDaemon()`: Daemon mode bootstrap (full init)
+- `startProxy()`: Proxy mode bootstrap (stdio relay only)
+- `shutdown(signal)`: Handles SIGINT/SIGTERM; clears queue playback orchestration, closes history DB, destroys web server, destroys mpv, removes PID file
 - Uses `console.error()` only (never `console.log()` — corrupts MCP stdio)
 
 **Phase 1+ Changes**:
