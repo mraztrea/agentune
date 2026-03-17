@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import type { Video } from '@distube/ytsr';
 import { youtubeDl } from 'youtube-dl-exec';
 
+// Hide yt-dlp console window on Windows (tinyspawn doesn't set windowsHide by default)
+const SPAWN_OPTS = process.platform === 'win32' ? { windowsHide: true } : {};
+
 export interface SearchResult {
   id: string;
   title: string;
@@ -148,12 +151,12 @@ export class YouTubeProvider {
         message: lastError.message,
       });
 
-      const result = await youtubeDl(`ytsearch${limit}:${query}`, {
+      const result = await (youtubeDl as Function)(`ytsearch${limit}:${query}`, {
         dumpSingleJson: true,
         flatPlaylist: true,
         noWarnings: true,
         callHome: false,
-      }) as unknown as YtDlpSearchResult;
+      }, SPAWN_OPTS) as unknown as YtDlpSearchResult;
 
       const mapped = mapYtDlpSearchEntries(result.entries, limit);
       console.error('[youtube-provider] search complete', { query, total: mapped.length, source: 'yt-dlp' });
@@ -173,12 +176,12 @@ export class YouTubeProvider {
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        info = await youtubeDl(url, {
+        info = await (youtubeDl as Function)(url, {
           dumpSingleJson: true,
           format: 'bestaudio[ext=m4a]/bestaudio',
           noWarnings: true,
           callHome: false,
-        });
+        }, SPAWN_OPTS);
         break;
       } catch (error) {
         lastError = error as Error;

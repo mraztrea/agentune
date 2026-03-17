@@ -23,6 +23,9 @@ export class QueuePlaybackController {
   private suppressStoppedHandler = false;
   private shuttingDown = false;
   private currentPlayId: number | null = null;
+  // Pre-fetched audio for the next queued track (keyed by video ID)
+  private prefetchedAudio: { id: string; audio: AudioInfo } | null = null;
+  private prefetchInProgress: string | null = null;
 
   constructor(
     private readonly mpv: MpvController,
@@ -55,6 +58,8 @@ export class QueuePlaybackController {
       return { item: resolved.item, action: 'queued', position, startedPlayback: true };
     }
 
+    // If this is the next-up track, pre-fetch its audio
+    if (position === 1) this.prefetchNextTrack();
     return { item: resolved.item, action: 'queued', position, startedPlayback: false };
   }
 
@@ -182,7 +187,15 @@ export class QueuePlaybackController {
     id: string,
     extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
   ): Promise<{ item: QueueItem; audio: AudioInfo }> {
-    const audio = await this.youtubeProvider.getAudioUrl(id);
+    // Use pre-fetched audio if available for this track
+    let audio: AudioInfo;
+    if (this.prefetchedAudio && this.prefetchedAudio.id === id) {
+      audio = this.prefetchedAudio.audio;
+      this.prefetchedAudio = null;
+      console.error('[sbotify] Using pre-fetched audio for:', id);
+    } else {
+      audio = await this.youtubeProvider.getAudioUrl(id);
+    }
     return {
       audio,
       item: {
@@ -195,6 +208,29 @@ export class QueuePlaybackController {
         context: extraMeta?.context,
       },
     };
+  }
+
+  /** Pre-fetch the next queued track's audio URL in the background. */
+  private prefetchNextTrack(): void {
+    const nextItem = this.queueManager.peek();
+    if (!nextItem) return;
+    if (this.prefetchedAudio?.id === nextItem.id) return; // already cached
+    if (this.prefetchInProgress === nextItem.id) return;  // already fetching
+
+    this.prefetchInProgress = nextItem.id;
+    console.error('[sbotify] Pre-fetching audio for next track:', nextItem.title);
+
+    this.youtubeProvider.getAudioUrl(nextItem.id).then((audio) => {
+      // Only store if the queue hasn't changed
+      if (this.queueManager.peek()?.id === nextItem.id) {
+        this.prefetchedAudio = { id: nextItem.id, audio };
+        console.error('[sbotify] Pre-fetch complete for:', nextItem.title);
+      }
+    }).catch((err) => {
+      console.error('[sbotify] Pre-fetch failed:', (err as Error).message);
+    }).finally(() => {
+      this.prefetchInProgress = null;
+    });
   }
 
   private async recordInterruptedPlay(): Promise<void> {
@@ -252,6 +288,9 @@ export class QueuePlaybackController {
     }
 
     this.enrichTrackTags(queueItem.artist, queueItem.title);
+
+    // Pre-fetch next track's audio URL for seamless transitions
+    this.prefetchNextTrack();
   }
 
   async replaceCurrentTrack(

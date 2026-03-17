@@ -41,6 +41,11 @@ export class QueueManager extends EventEmitter {
     return nextItem;
   }
 
+  /** Look at the next item without removing it from the queue. */
+  peek(): QueueItem | null {
+    return this.state.queue[0] ?? null;
+  }
+
   size(): number {
     return this.state.queue.length;
   }
