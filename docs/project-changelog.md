@@ -1,5 +1,31 @@
 # Project Changelog
 
+## 2026-03-17 (Daemon UX — Terminal Hide + Auto-Shutdown)
+
+### Auto-Shutdown on Idle + Transparent Windows Daemon
+- Updated `src/proxy/daemon-launcher.ts` — Added `windowsHide: true` to daemon spawn options
+  - Prevents visible terminal window popup when daemon auto-starts on Windows
+  - Daemon process now completely transparent to user
+- Updated `src/daemon/daemon-server.ts` — Added session lifecycle callbacks with 5-second grace timer
+  - `onSessionCreated()` callback: cancels pending idle shutdown when agent reconnects
+  - `onAllSessionsClosed()` callback: triggers idle shutdown timer
+  - 5-second idle grace period (configurable via `IDLE_GRACE_PERIOD`)
+  - If no new session connects during grace period, daemon exits gracefully
+  - Cleans up mpv, web dashboard, PID file on idle shutdown
+- Updated `src/mcp/mcp-server.ts` — `createHttpMcpHandler()` now accepts callbacks
+  - Constructor signature: `createHttpMcpHandler({ onSessionCreated?, onAllSessionsClosed? })`
+  - Enables daemon to react to session lifecycle events
+  - Tracks active sessions via `hadSession` flag for onAllSessionsClosed precision
+
+### Benefits
+- Windows users no longer see console window when daemon auto-starts
+- Daemon no longer persists indefinitely after final agent session closes
+- Resource cleanup happens automatically (mpv, web server, temp files)
+- Seamless experience: agent closes → 5s grace period → daemon exits if idle
+
+### Docs Updated
+- Updated `docs/system-architecture.md` — Daemon Architecture section: idle timeout, auto-shutdown behavior, callback mechanism
+
 ## 2026-03-17 (Singleton Daemon + Stdio Proxy)
 
 ### Daemon Architecture for Stateful Session Sharing

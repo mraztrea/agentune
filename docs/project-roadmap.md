@@ -57,6 +57,46 @@ Phase 1 (Setup)
 - Phase 7 completed: Real queue playback, history, auto-advance, and release-prep files
 - Public npm publish remains deferred by user request
 
+## Daemon UX — Terminal Hide + Auto-Shutdown (COMPLETE)
+
+**Status**: ✓ COMPLETE (Mar 17)
+
+**Objectives**:
+- [x] Prevent visible terminal window on Windows daemon auto-start
+- [x] Auto-shutdown daemon 5 seconds after last agent session closes
+- [x] Clean up mpv, web server, and PID file on idle shutdown
+- [x] Cancel idle shutdown if new session connects during grace period
+
+**Deliverables**:
+- [x] Updated `src/proxy/daemon-launcher.ts` — `windowsHide: true` in spawn options
+- [x] Updated `src/daemon/daemon-server.ts` — Session lifecycle callbacks + 5s idle timer
+- [x] Updated `src/mcp/mcp-server.ts` — `createHttpMcpHandler()` callback support
+
+**Key Implementation**:
+```typescript
+// Daemon server lifecycle
+onSessionCreated: () => {
+  // Cancel pending idle shutdown — a new agent connected
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+}
+
+onAllSessionsClosed: () => {
+  // Start grace period (5s) before shutting down
+  idleTimer = setTimeout(() => {
+    shutdownFn('idle');
+  }, IDLE_GRACE_PERIOD);
+}
+```
+
+**Success Criteria**:
+- [x] No console window visible on Windows when daemon auto-starts
+- [x] Daemon exits cleanly 5s after last agent disconnects
+- [x] mpv, web server, PID file cleaned up on idle shutdown
+- [x] New agent connections cancel idle shutdown during grace period
+- [x] All tests pass; code compiles clean
+
+---
+
 ## Singleton Daemon + Stdio Proxy (COMPLETE)
 
 **Status**: ✓ COMPLETE (Mar 17)
@@ -935,7 +975,7 @@ export class QueueManager {
 
 ## Progress Tracking
 
-**Last Updated**: Mar 17, 2026 (Singleton Daemon + Stdio Proxy complete; Phase 5.5 Discovery Pipeline; Phase 4 Taste Intelligence + Session Lanes; Phases 1–7 complete; publish deferred)
+**Last Updated**: Mar 17, 2026 (Daemon UX auto-shutdown + terminal hide complete; Singleton Daemon + Stdio Proxy; Phase 5.5 Discovery Pipeline; Phase 4 Taste Intelligence + Session Lanes; Phases 1–7 complete; publish deferred)
 
 | Phase | Status | % Complete | Notes |
 |-------|--------|-----------|-------|
@@ -950,7 +990,8 @@ export class QueueManager {
 | 6 | ✓ COMPLETE | 100% | Mood mode (deprecated; replaced by discover) |
 | 7 | ✓ COMPLETE | 100% | Queue manager + auto-advance + release prep |
 | **Daemon** | ✓ COMPLETE | 100% | Singleton daemon + stdio proxy + CLI commands (status, stop) |
-| **Overall** | **✓ 100%** | | MVP + daemon: agent-driven music control + taste intelligence + discovery + daemon singleton; public publish deferred |
+| **Daemon UX** | ✓ COMPLETE | 100% | Terminal hide on Windows + 5s auto-shutdown on idle |
+| **Overall** | **✓ 100%** | | MVP + daemon: agent-driven music control + taste intelligence + discovery + daemon singleton + UX polish; public publish deferred |
 
 ---
 

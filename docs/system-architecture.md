@@ -579,7 +579,7 @@ getRandomMoodQuery(mood: Mood): string
 
 ## Daemon Architecture (Singleton Daemon + Proxy Pattern)
 
-One device = One sbotify daemon. All agent sessions share state via stdio-to-HTTP proxy.
+One device = One sbotify daemon. All agent sessions share state via stdio-to-HTTP proxy. Daemon auto-shuts down 5 seconds after the last agent session disconnects.
 
 ```
 Agent 1 ──stdio──> sbotify (proxy) ──HTTP──╮
@@ -595,7 +595,7 @@ Browser ──HTTP :3737──────────────────�
 ### Proxy Mode (Default)
 - `sbotify` command (no args) starts in proxy mode
 - Connects via stdio transport to agent
-- Auto-starts daemon if not running (spawn `sbotify --daemon` as detached child)
+- Auto-starts daemon if not running (spawn `sbotify --daemon` as detached child with `windowsHide: true`)
 - Reads JSON-RPC from stdin, forwards to daemon HTTP API
 - Pure relay: no singletons, no mpv, no database
 
@@ -607,6 +607,7 @@ Browser ──HTTP :3737──────────────────�
   - `/shutdown` — graceful daemon shutdown
 - PID file at `~/.sbotify/daemon.pid` with port info (enables proxy discovery)
 - Logs to `~/.sbotify/daemon.log`
+- **Auto-shutdown**: When all agent sessions close, daemon waits 5 seconds; if no new session connects, daemon exits gracefully (cleans up mpv, web dashboard, PID file)
 
 ### PID Manager
 - `src/daemon/pid-manager.ts` — Manages `~/.sbotify/daemon.pid`
@@ -621,10 +622,14 @@ Browser ──HTTP :3737──────────────────�
 - `sbotify status` — Print daemon info (running/stopped, PID, port, uptime) to stderr
 - `sbotify stop` — POST to daemon `/shutdown` endpoint
 
-### Session Management
+### Session Management & Idle Timeout
 - Each proxy/client gets unique `Mcp-Session-Id` header
 - Daemon's `StreamableHTTPServerTransport` maintains separate sessions
 - Multiple agents can connect simultaneously; tool state shared (single mpv, single queue, single taste engine)
+- **Idle Grace Period**: 5-second timeout triggered when `onAllSessionsClosed()` fires
+  - If a new session connects during grace period, timeout is cancelled
+  - If timeout expires, daemon calls shutdown handler to exit cleanly
+  - Callback functions passed to `createHttpMcpHandler()`: `onSessionCreated()` and `onAllSessionsClosed()`
 
 ## Scalability & Limits
 
