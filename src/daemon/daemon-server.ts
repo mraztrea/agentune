@@ -7,18 +7,39 @@ import { createHttpMcpHandler } from '../mcp/mcp-server.js';
 
 const DAEMON_PORT = 3747;
 
+const IDLE_GRACE_PERIOD = 5_000; // 5s before shutdown after last session closes
+
 export class DaemonServer {
   private server: Server | null = null;
   private mcpHandler: ReturnType<typeof createHttpMcpHandler> | null = null;
   private port = DAEMON_PORT;
   private shutdownFn: ((reason: string) => void) | null = null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   setShutdownHandler(fn: (reason: string) => void): void {
     this.shutdownFn = fn;
   }
 
   async start(): Promise<number> {
-    this.mcpHandler = createHttpMcpHandler();
+    this.mcpHandler = createHttpMcpHandler({
+      onSessionCreated: () => {
+        // Cancel pending idle shutdown — a new agent connected
+        if (this.idleTimer) {
+          clearTimeout(this.idleTimer);
+          this.idleTimer = null;
+          console.error('[sbotify] Idle shutdown cancelled — new session connected');
+        }
+      },
+      onAllSessionsClosed: () => {
+        // Start grace period before shutting down
+        if (this.idleTimer) clearTimeout(this.idleTimer);
+        console.error(`[sbotify] All sessions closed — shutting down in ${IDLE_GRACE_PERIOD / 1000}s if no reconnect`);
+        this.idleTimer = setTimeout(() => {
+          console.error('[sbotify] Grace period expired — shutting down');
+          this.shutdownFn?.('idle');
+        }, IDLE_GRACE_PERIOD);
+      },
+    });
     this.server = createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -56,6 +77,8 @@ export class DaemonServer {
   }
 
   async destroy(): Promise<void> {
+    this.shutdownFn = null; // disarm to prevent double-shutdown from transport onclose
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
     await this.mcpHandler?.close();
     return new Promise((resolve) => {
       if (!this.server) { resolve(); return; }

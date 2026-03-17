@@ -35,7 +35,8 @@ function spawnDaemon(): void {
   const logFd = openSync(logPath, 'w');
 
   const child = spawn(process.execPath, [entryPoint, '--daemon'], {
-    detached: true,
+    detached: process.platform !== 'win32', // Unix: setsid for session independence; Windows: skip to avoid console popup
+    windowsHide: true,
     stdio: ['ignore', logFd, logFd],
     env: { ...process.env },
   });
