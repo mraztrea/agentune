@@ -56,7 +56,6 @@ sbotify/
 │   │   ├── apple-search-provider.ts
 │   │   ├── metadata-normalizer.ts
 │   │   ├── search-result-scorer.ts
-│   │   ├── smart-search-provider.ts
 │   │   └── youtube-provider.ts
 │   ├── proxy/
 │   │   ├── daemon-launcher.ts

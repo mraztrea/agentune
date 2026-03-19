@@ -15,6 +15,8 @@
 - Confirmed default discover seeds come from top history artists + top history tags only
 - Confirmed internal Apple IDs stay internal and are stripped before MCP output
 - Confirmed successful `play_song()` / `add_song()` invalidate discover snapshots; `update_persona()` does not
+- Removed the orphan Smart Search bootstrap and deleted `src/providers/smart-search-provider.ts`
+- Startup logs now reflect the Apple-only discover runtime
 - Synced plan + roadmap tracking docs to reflect the shipped discover rewrite instead of the older grouped-lane state
 
 ### Validation

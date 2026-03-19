@@ -1,5 +1,5 @@
 // Shared query normalization — strips YouTube metadata noise before API queries
-// Used by AppleSearchProvider and SmartSearchProvider (DRY)
+// Used by AppleSearchProvider and song-resolution query cleanup (DRY)
 
 /** Strip YouTube-specific noise: "(Official Audio)", "[HD]", "- Topic", "VEVO", etc. */
 export function normalizeForQuery(text: string): string {

@@ -10,7 +10,6 @@ import { createQueueManager } from './queue/queue-manager.js';
 import { createQueuePlaybackController, getQueuePlaybackController } from './queue/queue-playback-controller.js';
 import { createHistoryStore, getHistoryStore } from './history/history-store.js';
 import { createAppleSearchProvider } from './providers/apple-search-provider.js';
-import { createSmartSearchProvider } from './providers/smart-search-provider.js';
 import { createTasteEngine } from './taste/taste-engine.js';
 import { DaemonServer } from './daemon/daemon-server.js';
 import { writePidFile, removePidFile } from './daemon/pid-manager.js';
@@ -37,8 +36,7 @@ function bootstrapComponents() {
   if (store) {
     const db = store.getDatabase();
     createAppleSearchProvider(db);
-    createSmartSearchProvider(youtubeProvider, db);
-    console.error('[sbotify] Discovery providers initialized (Apple + Smart Search).');
+    console.error('[sbotify] Discovery provider initialized (Apple).');
   }
 
   const mpv = createMpvController();
