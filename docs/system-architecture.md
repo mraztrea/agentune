@@ -99,24 +99,25 @@ Important constraints:
 
 ### Discovery Pipeline
 
-File: `src/taste/candidate-generator.ts`
+Files:
 
-`discover()` is now a grouped-candidate API, not a server-side scoring API.
-
-Returned lanes:
-
-- `continuation`
-- `comfort`
-- `contextFit`
-- `wildcard`
+- `src/taste/discover-batch-builder.ts`
+- `src/taste/discover-merge-and-dedup.ts`
+- `src/taste/discover-soft-ranker.ts`
+- `src/taste/discover-pagination-cache.ts`
+- `src/taste/discover-pipeline.ts`
 
 Behavior:
 
-- The server guarantees candidate diversity by lane.
-- The agent decides what to play from raw candidates plus `get_session_state()`.
-- There is no server-side ranking module in the active codepath.
-- `mode` still changes per-lane ratios.
-- `intent.allowed_tags` and `intent.avoid_tags` still shape results.
+- `discover()` is a flat paginated API: `{ page, limit, hasMore, candidates[] }`.
+- `DiscoverBatchBuilder` pulls Apple artist tracks and Apple genre search results only.
+- When `artist` and `genres` are both omitted, the builder seeds from the top 3 history artists and top 3 history tags.
+- `mergeAndDedup()` removes duplicate `artist + title` pairs and interleaves artists before ranking.
+- `rankCandidates()` soft-ranks by tag affinity, artist familiarity, average completion, novelty, recent-repeat penalty, and skip rate.
+- `toPublicCandidate()` strips internal Apple IDs before returning results.
+- Pagination snapshots are cached in memory per normalized `{ artist, genres }` key, with a 5 minute TTL, 10-entry cap, and no empty-result caching.
+- Successful `play_song()` and `add_song()` invalidate the discover cache.
+- `update_persona()` does not invalidate the discover cache.
 
 ### MCP Surface
 
@@ -129,8 +130,8 @@ State-related tools:
 
 - `get_session_state()`
   - returns `context`, `persona`, and `history`
-- `discover(mode?, intent?)`
-  - returns grouped candidates and `more_available: true`
+- `discover(page?, limit?, artist?, genres?, mode?, intent?)`
+  - returns `{ page, limit, hasMore, candidates }`
 - `update_persona({ taste })`
   - persists free-text taste text
   - empty string is allowed to clear the value
@@ -144,6 +145,11 @@ Playback tools remain queue-first:
 - `now_playing`
 - `volume`
 - `history`
+
+Important notes:
+
+- `mode` and `intent` are accepted by the tool schema for compatibility, but ignored by the current discover pipeline.
+- Discover ordering is server-side, but the response surface does not expose raw scores.
 
 ### Queue and Playback
 
@@ -203,9 +209,9 @@ Important notes:
 ### Discover Music
 
 1. Agent optionally calls `get_session_state()` first.
-2. Agent calls `discover(mode?, intent?)`.
-3. `CandidateGenerator` builds grouped candidates from current track, history, and optional tags.
-4. The server returns grouped candidates without ranking them.
+2. Agent calls `discover(page?, limit?, artist?, genres?)`.
+3. `DiscoverPipeline` checks the pagination cache for the normalized `{ artist, genres }` seed set.
+4. On cache miss, the pipeline builds Apple-only batches, deduplicates them, soft-ranks them, stores the snapshot, and slices the requested page.
 5. Agent chooses a track and calls `add_song()` or `play_song()`.
 
 ### Update Persona
@@ -213,6 +219,7 @@ Important notes:
 1. Agent calls `update_persona({ taste })` or the dashboard posts `/api/persona`.
 2. The taste engine writes the value to `session_state.persona_taste_text`.
 3. Updated traits + taste are broadcast to dashboard clients.
+4. Existing discover snapshots stay cached until TTL expiry, eviction, or a later `play_song()` / `add_song()` invalidation.
 
 ### Playback Feedback
 
@@ -227,13 +234,8 @@ Important notes:
   - history store behavior
   - queue behavior
   - resolver/provider behavior
-  - candidate generation
+  - discover pipeline and soft ranking
   - taste engine redesign
-
-Last verified:
-
-- `2026-03-18`
-- `npm test`: 77 passed, 0 failed
 
 ## Design Rules
 

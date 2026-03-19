@@ -1,5 +1,33 @@
 # Project Changelog
 
+## 2026-03-19 (Discover Rewrite)
+
+### Flat Apple-Only Discover Pipeline
+- Confirmed the grouped discover lanes are replaced by the new flat flow:
+  - `src/taste/discover-batch-builder.ts`
+  - `src/taste/discover-merge-and-dedup.ts`
+  - `src/taste/discover-soft-ranker.ts`
+  - `src/taste/discover-pagination-cache.ts`
+  - `src/taste/discover-pipeline.ts`
+  - `src/mcp/mcp-server.ts`
+  - `src/mcp/tool-handlers.ts`
+- Confirmed public discover contract is now `discover(page?, limit?, artist?, genres?)`
+- Confirmed default discover seeds come from top history artists + top history tags only
+- Confirmed internal Apple IDs stay internal and are stripped before MCP output
+- Confirmed successful `play_song()` / `add_song()` invalidate discover snapshots; `update_persona()` does not
+- Synced plan + roadmap tracking docs to reflect the shipped discover rewrite instead of the older grouped-lane state
+
+### Validation
+- `npm run build`: passed
+- `npm test`: 93 passed, 0 failed
+- Discover rewrite test state:
+  - `src/taste/discover-pipeline.test.ts`: passing
+  - `src/taste/discover-soft-ranker.test.ts`: passing
+- Built-handler smoke:
+  - `handleDiscover({ artist: 'Nils Frahm', limit: 1 })` returned `{ page: 1, limit: 1, hasMore: true, candidates: [...] }`
+- Remaining validation gap:
+  - no full daemon/MCP smoke result recorded yet
+
 ## 2026-03-18 (Agent-First State Redesign Sync)
 
 ### Verified Current State Contract

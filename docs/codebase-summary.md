@@ -25,7 +25,7 @@ The active state redesign is agent-first:
 }
 ```
 
-`discover()` now returns grouped candidates from four lanes. The server does not rank them before returning them; the agent chooses what to play from raw grouped suggestions plus `get_session_state()`.
+`discover()` now returns a flat paginated list of Apple candidates. The server builds Apple-only batches, deduplicates them, soft-ranks them from history plus persona traits, caches the ranked snapshot, then returns the requested page.
 
 ## Project Structure
 
@@ -65,8 +65,13 @@ sbotify/
 │   │   ├── queue-manager.ts
 │   │   └── queue-playback-controller.ts
 │   ├── taste/
-│   │   ├── candidate-generator.ts
-│   │   ├── candidate-generator.test.ts
+│   │   ├── discover-batch-builder.ts
+│   │   ├── discover-merge-and-dedup.ts
+│   │   ├── discover-pagination-cache.ts
+│   │   ├── discover-pipeline.test.ts
+│   │   ├── discover-pipeline.ts
+│   │   ├── discover-soft-ranker.test.ts
+│   │   ├── discover-soft-ranker.ts
 │   │   ├── taste-engine.ts
 │   │   └── taste-engine.test.ts
 │   ├── types/
@@ -99,11 +104,12 @@ Current responsibilities:
 - persist `tracks`, `plays`, `provider_cache`, and `session_state`
 - store free-text persona taste in `session_state.persona_taste_text`
 - keep older `lane_json`, `taste_state_json`, `agent_persona_json`, and `current_intent_json` columns for compatibility
-- expose aggregate queries used by the taste engine:
+- expose aggregate queries used by the taste engine and discover pipeline:
   - `getRecentPlaysDetailed()`
   - `getTopArtists()`
   - `getTopTags()`
-  - `getTrackPlayCount()`
+  - `getTrackStats()`
+  - `batchGetTrackStats()`
 
 Important details:
 
@@ -136,33 +142,29 @@ Important details:
 
 ### Discovery
 
-File: `src/taste/candidate-generator.ts`
+Files:
+
+- `src/taste/discover-batch-builder.ts`
+- `src/taste/discover-merge-and-dedup.ts`
+- `src/taste/discover-soft-ranker.ts`
+- `src/taste/discover-pagination-cache.ts`
+- `src/taste/discover-pipeline.ts`
 
 Current responsibilities:
 
-- generate grouped candidates for `discover()`
-- deduplicate repeated artist/title pairs
-- trim each lane using the selected mode ratio
-- apply `allowed_tags` and `avoid_tags`
-
-Current lanes:
-
-- `continuation`: current-artist catalog plus Smart Search fallback
-- `comfort`: top local tracks from history
-- `contextFit`: Apple genre/search plus Smart Search tag fallback
-- `wildcard`: artist expansion for new discoveries
-
-Modes:
-
-- `focus`: `50 / 30 / 15 / 5`
-- `balanced`: `40 / 30 / 20 / 10`
-- `explore`: `20 / 15 / 30 / 35`
+- build Apple candidate batches from explicit `artist` / `genres` seeds
+- fall back to top 3 history artists and top 3 history tags when no seeds are provided
+- deduplicate repeated `artist + title` pairs, interleave artists, and break adjacent same-artist clusters after ranking
+- soft-rank candidates from top artists, top tags, per-track completion, skip rate, and recent-repeat penalty
+- cache ranked snapshots for pagination
 
 Important details:
 
-- The handler returns grouped lanes, not scored candidates.
-- `contextFit` falls back to recent history tags when no `intent.allowed_tags` are supplied.
-- Each candidate carries a `sourceDetail` string to explain where it came from.
+- Public output is flat and paginated: `{ page, limit, hasMore, candidates[] }`.
+- `DiscoverBatchBuilder` only calls Apple artist-track and Apple genre search APIs; public candidates always return `provider: "apple"`.
+- Internal Apple IDs stay on internal candidates only; `toPublicCandidate()` strips them before the MCP response.
+- The pagination cache is in-memory, keyed by normalized `{ artist, genres }`, uses a 5 minute TTL, keeps up to 10 snapshots, and does not cache empty results.
+- If no explicit seeds exist and history has no top artists or tags, `discover()` returns an empty candidate list.
 
 ## MCP Surface
 
@@ -175,8 +177,8 @@ State-related MCP tools:
 
 - `get_session_state()`
   - returns `context`, `persona`, and `history`
-- `discover(mode?, intent?)`
-  - returns grouped candidates under `continuation`, `comfort`, `contextFit`, and `wildcard`
+- `discover(page?, limit?, artist?, genres?, mode?, intent?)`
+  - returns `{ page, limit, hasMore, candidates }`
 - `update_persona({ taste })`
   - persists free-text taste text
   - empty string is allowed to clear it
@@ -196,8 +198,11 @@ Playback-related MCP tools:
 Important details:
 
 - `play_song` and `add_song` are Apple-first for canonical metadata.
-- `discover()` returns grouped raw candidates plus a tip to call `add_song()` or `play_song()`.
-- `get_session_state()` and `update_persona()` are the state entry points; there is no public ranking API.
+- `discover()` returns a flat page plus a tip to call `add_song()` / `play_song()`, and to use `discover(page=2)` when `hasMore` is true.
+- `mode` and `intent` remain in the MCP schema for compatibility, but the current discover pipeline ignores them.
+- Successful `play_song()` and `add_song()` clear the discover pagination cache.
+- `update_persona()` persists taste text and broadcasts persona updates, but does not clear the discover pagination cache.
+- Discover ranking is internal only; the public MCP response does not expose scores.
 
 ## Queue and Playback
 
@@ -262,7 +267,8 @@ Current state-redesign coverage lives in:
 
 - `src/history/history-store-state-redesign.test.ts`
 - `src/taste/taste-engine.test.ts`
-- `src/taste/candidate-generator.test.ts`
+- `src/taste/discover-pipeline.test.ts`
+- `src/taste/discover-soft-ranker.test.ts`
 
 `package.json` currently defines:
 
@@ -276,8 +282,10 @@ That means every test run compiles first, then runs the built Node test suite fr
 
 These are no longer current behavior:
 
-- server-side candidate ranking
-- scored `discover()` responses
+- grouped 4-lane `discover()` responses
+- `discover` modes changing lane ratios
+- `intent.allowed_tags` / `intent.avoid_tags` shaping discover results
+- Smart Search participation in the discover pipeline
 - the older weighted taste runtime
 - lane-based state summaries
 - dashboard context badges
