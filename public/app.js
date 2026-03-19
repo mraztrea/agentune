@@ -11,15 +11,17 @@ const elements = {
   volume: document.querySelector('[data-volume]'),
   taste: document.querySelector('[data-taste]'),
   saveTaste: document.querySelector('[data-save-taste]'),
-  traitExploration: document.querySelector('[data-trait-exploration]'),
+  personaMessage: document.querySelector('[data-persona-message]'),
+  traitExplorationInput: document.querySelector('[data-trait-exploration-input]'),
   traitExplorationVal: document.querySelector('[data-trait-exploration-val]'),
-  traitVariety: document.querySelector('[data-trait-variety]'),
+  traitVarietyInput: document.querySelector('[data-trait-variety-input]'),
   traitVarietyVal: document.querySelector('[data-trait-variety-val]'),
-  traitLoyalty: document.querySelector('[data-trait-loyalty]'),
+  traitLoyaltyInput: document.querySelector('[data-trait-loyalty-input]'),
   traitLoyaltyVal: document.querySelector('[data-trait-loyalty-val]'),
 };
 
 let socket;
+let traitsDirty = false;
 
 function formatTime(totalSeconds) {
   const minutes = Math.floor(totalSeconds / 60);
@@ -86,7 +88,7 @@ elements.mute.addEventListener('click', () => {
 });
 
 function renderPersona(data) {
-  if (data.traits) {
+  if (data.traits && !traitsDirty) {
     renderTrait('exploration', data.traits.exploration);
     renderTrait('variety', data.traits.variety);
     renderTrait('loyalty', data.traits.loyalty);
@@ -99,24 +101,63 @@ function renderPersona(data) {
 
 function renderTrait(name, value) {
   const val = Math.round((value ?? 0.5) * 100) / 100;
-  const fill = elements[`trait${name.charAt(0).toUpperCase() + name.slice(1)}`];
+  const input = elements[`trait${name.charAt(0).toUpperCase() + name.slice(1)}Input`];
   const label = elements[`trait${name.charAt(0).toUpperCase() + name.slice(1)}Val`];
-  if (fill) fill.style.width = `${val * 100}%`;
+  if (input && document.activeElement !== input) input.value = val.toFixed(2);
   if (label) label.textContent = val.toFixed(2);
+}
+
+function getTraitPayload() {
+  return {
+    exploration: Number(elements.traitExplorationInput.value),
+    variety: Number(elements.traitVarietyInput.value),
+    loyalty: Number(elements.traitLoyaltyInput.value),
+  };
+}
+
+function syncTraitLabelsFromInputs() {
+  traitsDirty = true;
+  renderTrait('exploration', Number(elements.traitExplorationInput.value));
+  renderTrait('variety', Number(elements.traitVarietyInput.value));
+  renderTrait('loyalty', Number(elements.traitLoyaltyInput.value));
+}
+
+for (const input of [
+  elements.traitExplorationInput,
+  elements.traitVarietyInput,
+  elements.traitLoyaltyInput,
+]) {
+  input.addEventListener('input', syncTraitLabelsFromInputs);
 }
 
 elements.saveTaste.addEventListener('click', () => {
   const text = elements.taste.value.trim();
+  const payload = { taste: text };
+  if (traitsDirty) {
+    payload.traits = getTraitPayload();
+  }
+
   fetch('/api/persona', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taste: text }),
+    body: JSON.stringify(payload),
   })
-    .then((r) => r.json())
-    .then((data) => {
-      if (data.traits) renderPersona(data);
+    .then(async (response) => {
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message ?? 'Persona save failed.');
+      }
+      return data;
     })
-    .catch((err) => console.error('Save taste failed:', err));
+    .then((data) => {
+      traitsDirty = false;
+      showPersonaMessage('Persona saved.');
+      if (data.traits || data.taste !== undefined) renderPersona(data);
+    })
+    .catch((err) => {
+      showPersonaMessage(err.message ?? 'Persona save failed.', true);
+      console.error('Save taste failed:', err);
+    });
 });
 
 fetch('/api/status')
@@ -132,3 +173,8 @@ fetch('/api/persona')
   .catch(() => {});
 
 connect();
+
+function showPersonaMessage(message, isError = false) {
+  elements.personaMessage.textContent = message;
+  elements.personaMessage.classList.toggle('is-error', isError);
+}

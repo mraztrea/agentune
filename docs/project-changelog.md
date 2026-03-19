@@ -1,5 +1,44 @@
 # Project Changelog
 
+## 2026-03-19 (Hard Manual Persona Traits)
+
+### Manual Persona Traits Are Now the Source of Truth
+- Added durable `session_state.persona_traits_json` storage in:
+  - `src/history/history-schema.ts`
+  - `src/history/history-store.ts`
+- Added runtime migration and strict `0..1` validation for persisted traits
+- Refactored `src/taste/taste-engine.ts` so `get_session_state()` now returns stored manual traits instead of history-derived traits
+- Added MCP tool `set_persona_traits({ exploration, variety, loyalty })` in:
+  - `src/mcp/mcp-server.ts`
+  - `src/mcp/tool-handlers.ts`
+- Kept `update_persona({ taste })` taste-only and confirmed it no longer changes traits
+- Updated dashboard persona flow in:
+  - `src/web/web-server.ts`
+  - `public/index.html`
+  - `public/app.js`
+  - `public/style.css`
+- Dashboard `/api/persona` now accepts `taste`, `traits`, or both in one validated request
+- Persona WebSocket broadcasts now send stored traits, not computed trait snapshots
+
+### Discover Ranking + Cache Behavior
+- Updated `src/taste/discover-pipeline.ts` to read stored traits via `getTraits()`
+- Updated `src/taste/discover-soft-ranker.ts` so `variety` has a real but light nearby diversity effect
+- Trait changes now invalidate discover pagination snapshots immediately
+- Taste-only persona edits still leave discover cache intact
+
+### Tests + Docs
+- Updated tests to lock manual-trait behavior in:
+  - `src/history/history-store-state-redesign.test.ts`
+  - `src/taste/taste-engine.test.ts`
+  - `src/taste/discover-soft-ranker.test.ts`
+  - `src/taste/discover-pipeline.test.ts`
+  - `src/web/web-server-persona-sync.test.ts`
+- Synced manual-trait wording in `README.md`, `docs/codebase-summary.md`, `docs/system-architecture.md`, and `docs/project-roadmap.md`
+
+### Validation
+- `npm run build`: passed
+- `npm test`: 97 passed, 0 failed
+
 ## 2026-03-19 (Discover Rewrite)
 
 ### Flat Apple-Only Discover Pipeline
@@ -50,7 +89,7 @@
   - `package.json`
 - Confirmed `get_session_state()` now returns the agent-facing summary:
   - `context` with hour, period, and day of week
-  - `persona` with computed `traits` plus persisted free-text `taste`
+  - `persona` with `traits` plus persisted free-text `taste`
   - `history` with recent plays and top artists/tags
 - Confirmed `update_persona({ taste })` is part of the MCP surface and persists `session_state.persona_taste_text`
 - Confirmed `discover()` now returns grouped raw candidates from `continuation`, `comfort`, `contextFit`, and `wildcard`

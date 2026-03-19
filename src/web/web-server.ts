@@ -7,6 +7,8 @@ import type { MpvController } from '../audio/mpv-controller.js';
 import type { QueueManager } from '../queue/queue-manager.js';
 import { StateBroadcaster } from './state-broadcaster.js';
 import { getTasteEngine } from '../taste/taste-engine.js';
+import type { PersonaTraits } from '../taste/taste-engine.js';
+import { invalidateDiscoverCache } from '../taste/discover-pagination-cache.js';
 import {
   DEFAULT_PORT,
   MAX_PORT_ATTEMPTS,
@@ -148,22 +150,43 @@ export class WebServer {
     if (request.method === 'GET' && url.pathname === '/api/persona') {
       const taste = getTasteEngine();
       if (!taste) { sendJson(response, { message: 'Unavailable' }, 503); return; }
-      sendJson(response, { traits: taste.computeTraits(), taste: taste.getTasteText() });
+      sendJson(response, taste.getPersona());
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/api/persona') {
       const body = await readJsonBody(request);
-      if (typeof body?.taste !== 'string') {
-        sendJson(response, { message: 'taste field required' }, 400);
+      const hasTaste = hasOwn(body, 'taste');
+      const hasTraits = hasOwn(body, 'traits');
+
+      if (!hasTaste && !hasTraits) {
+        sendJson(response, { message: 'taste and/or traits field required' }, 400);
         return;
       }
+
+      if (hasTaste && typeof body?.taste !== 'string') {
+        sendJson(response, { message: 'taste must be a string' }, 400);
+        return;
+      }
+
+      const nextTraits = hasTraits ? parsePersonaTraitsPayload(body?.traits) : null;
+      if (hasTraits && !nextTraits) {
+        sendJson(response, { message: 'traits must include exploration, variety, and loyalty numbers between 0 and 1' }, 400);
+        return;
+      }
+
       const taste = getTasteEngine();
       if (!taste) { sendJson(response, { message: 'Unavailable' }, 503); return; }
-      const nextTaste = (body.taste as string).slice(0, 1000);
-      taste.saveTasteText(nextTaste);
-      const traits = taste.computeTraits();
-      sendJson(response, { updated: true, traits, taste: nextTaste });
+
+      if (hasTaste) {
+        taste.saveTasteText((body?.taste as string).slice(0, 1000));
+      }
+      if (nextTraits) {
+        taste.saveTraits(nextTraits);
+        invalidateDiscoverCache();
+      }
+
+      sendJson(response, { updated: true, ...taste.getPersona() });
       this.broadcastPersona();
       return;
     }
@@ -237,7 +260,7 @@ export class WebServer {
     if (!taste) return;
     const payload = JSON.stringify({
       type: 'persona',
-      data: { traits: taste.computeTraits(), taste: taste.getTasteText() },
+      data: taste.getPersona(),
     });
     for (const client of this.wsServer.clients) {
       if (client.readyState === WebSocket.OPEN) {
@@ -264,9 +287,38 @@ export class WebServer {
     if (!taste) return;
     socket.send(JSON.stringify({
       type: 'persona',
-      data: { traits: taste.computeTraits(), taste: taste.getTasteText() },
+      data: taste.getPersona(),
     }));
   }
+}
+
+function hasOwn(value: unknown, key: string): boolean {
+  return !!value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function parsePersonaTraitsPayload(value: unknown): PersonaTraits | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const traits = value as Record<string, unknown>;
+  if (
+    !isTraitNumber(traits.exploration) ||
+    !isTraitNumber(traits.variety) ||
+    !isTraitNumber(traits.loyalty)
+  ) {
+    return null;
+  }
+
+  return {
+    exploration: traits.exploration,
+    variety: traits.variety,
+    loyalty: traits.loyalty,
+  };
+}
+
+function isTraitNumber(value: unknown): value is number {
+  return typeof value === 'number' && !Number.isNaN(value) && value >= 0 && value <= 1;
 }
 
 let webServer: WebServer | null = null;

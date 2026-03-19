@@ -61,7 +61,7 @@ test('HistoryStore.getTopArtists counts real plays instead of multiplying track 
   }
 });
 
-test('HistoryStore exposes detailed recent plays, tag stats, and persona taste text', () => {
+test('HistoryStore exposes detailed recent plays, tag stats, and manual persona state', () => {
   const dbPath = getTempDbPath();
   try {
     const store = new HistoryStore(dbPath);
@@ -81,6 +81,7 @@ test('HistoryStore exposes detailed recent plays, tag stats, and persona taste t
       playedSec: 210,
     });
     store.savePersonaTasteText('Warm ambient and slow piano.');
+    store.savePersonaTraits({ exploration: 0.8, variety: 0.35, loyalty: 0.6 });
 
     const recentDetailed = store.getRecentPlaysDetailed(5);
     const topTags = store.getTopTags(5);
@@ -90,13 +91,14 @@ test('HistoryStore exposes detailed recent plays, tag stats, and persona taste t
     assert.equal(recentDetailed[1]?.skipped, true);
     assert.ok(topTags.some((tag) => tag.tag === 'ambient' && tag.frequency >= 2));
     assert.equal(store.getPersonaTasteText(), 'Warm ambient and slow piano.');
+    assert.deepEqual(store.getPersonaTraits(), { exploration: 0.8, variety: 0.35, loyalty: 0.6 });
     store.close();
   } finally {
     cleanupDb(dbPath);
   }
 });
 
-test('HistoryStore migrates existing session_state tables to include persona_taste_text', () => {
+test('HistoryStore migrates existing session_state tables to include manual persona columns', () => {
   const dbPath = getTempDbPath();
   try {
     const dir = path.dirname(dbPath);
@@ -118,7 +120,25 @@ test('HistoryStore migrates existing session_state tables to include persona_tas
 
     const store = new HistoryStore(dbPath);
     store.savePersonaTasteText('Migrated taste');
+    store.savePersonaTraits({ exploration: 0.2, variety: 0.9, loyalty: 0.4 });
     assert.equal(store.getPersonaTasteText(), 'Migrated taste');
+    assert.deepEqual(store.getPersonaTraits(), { exploration: 0.2, variety: 0.9, loyalty: 0.4 });
+    store.close();
+  } finally {
+    cleanupDb(dbPath);
+  }
+});
+
+test('HistoryStore rejects invalid manual persona traits', () => {
+  const dbPath = getTempDbPath();
+  try {
+    const store = new HistoryStore(dbPath);
+
+    assert.throws(() => {
+      store.savePersonaTraits({ exploration: -0.1, variety: 0.5, loyalty: 0.5 });
+    });
+
+    assert.deepEqual(store.getPersonaTraits(), { exploration: 0.5, variety: 0.5, loyalty: 0.5 });
     store.close();
   } finally {
     cleanupDb(dbPath);

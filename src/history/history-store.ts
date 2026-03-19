@@ -6,6 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { normalizeTrackId, SCHEMA_SQL } from './history-schema.js';
+import type { PersonaTraits } from '../taste/taste-engine.js';
 
 export interface TrackRecord {
   id: string;
@@ -70,6 +71,14 @@ export interface BatchTrackStats {
   skipRate: number;
   hoursSinceLastPlay: number;
 }
+
+const DEFAULT_PERSONA_TRAITS: PersonaTraits = {
+  exploration: 0.5,
+  variety: 0.5,
+  loyalty: 0.5,
+};
+
+const DEFAULT_PERSONA_TRAITS_JSON = JSON.stringify(DEFAULT_PERSONA_TRAITS);
 
 export class HistoryStore {
   private db: Database.Database;
@@ -423,6 +432,32 @@ export class HistoryStore {
     `).run(text);
   }
 
+  /** Read persisted persona traits from session_state. */
+  getPersonaTraits(): PersonaTraits {
+    const row = this.db.prepare('SELECT persona_traits_json FROM session_state WHERE id = 1')
+      .get() as { persona_traits_json: string } | undefined;
+
+    if (!row?.persona_traits_json) {
+      return { ...DEFAULT_PERSONA_TRAITS };
+    }
+
+    try {
+      return parsePersonaTraits(row.persona_traits_json);
+    } catch {
+      console.error('[sbotify] Corrupted persona_traits_json — using neutral defaults.');
+      return { ...DEFAULT_PERSONA_TRAITS };
+    }
+  }
+
+  /** Save persisted persona traits to session_state. */
+  savePersonaTraits(traits: PersonaTraits): void {
+    const normalized = validatePersonaTraits(traits);
+    this.db.prepare(`
+      INSERT INTO session_state (id, persona_traits_json) VALUES (1, ?)
+      ON CONFLICT(id) DO UPDATE SET persona_traits_json = excluded.persona_traits_json
+    `).run(JSON.stringify(normalized));
+  }
+
   /** Expose underlying database for cache access (discovery providers). */
   getDatabase(): Database.Database {
     return this.db;
@@ -442,10 +477,45 @@ export class HistoryStore {
   private ensureSessionStateColumns(): void {
     const columns = this.db.prepare('PRAGMA table_info(session_state)').all() as Array<{ name: string }>;
     const hasPersonaTasteText = columns.some((column) => column.name === 'persona_taste_text');
+    const hasPersonaTraitsJson = columns.some((column) => column.name === 'persona_traits_json');
+
     if (!hasPersonaTasteText) {
       this.db.exec(`ALTER TABLE session_state ADD COLUMN persona_taste_text TEXT DEFAULT ''`);
     }
+    if (!hasPersonaTraitsJson) {
+      this.db.exec(`ALTER TABLE session_state ADD COLUMN persona_traits_json TEXT DEFAULT '${DEFAULT_PERSONA_TRAITS_JSON}'`);
+    }
+
+    this.db.prepare(`
+      UPDATE session_state
+      SET persona_traits_json = ?
+      WHERE persona_traits_json IS NULL OR TRIM(persona_traits_json) = ''
+    `).run(DEFAULT_PERSONA_TRAITS_JSON);
   }
+}
+
+function parsePersonaTraits(raw: string): PersonaTraits {
+  return validatePersonaTraits(JSON.parse(raw) as unknown);
+}
+
+function validatePersonaTraits(raw: unknown): PersonaTraits {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Persona traits must be an object.');
+  }
+
+  const traits = raw as Record<string, unknown>;
+  return {
+    exploration: validateTraitNumber(traits.exploration, 'exploration'),
+    variety: validateTraitNumber(traits.variety, 'variety'),
+    loyalty: validateTraitNumber(traits.loyalty, 'loyalty'),
+  };
+}
+
+function validateTraitNumber(value: unknown, field: keyof PersonaTraits): number {
+  if (typeof value !== 'number' || Number.isNaN(value) || value < 0 || value > 1) {
+    throw new Error(`persona traits.${field} must be a number between 0 and 1.`);
+  }
+  return value;
 }
 
 // -- Singleton --

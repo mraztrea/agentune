@@ -19,6 +19,7 @@ import {
   handleHistory,
   handleGetSessionState,
   handleUpdatePersona,
+  handleSetPersonaTraits,
 } from "./tool-handlers.js";
 
 /** Register all MCP tools onto a server instance */
@@ -107,26 +108,38 @@ export function registerMcpTools(server: McpServer): void {
   server.tool(
     "get_session_state",
     "Read current context, persona, and listening history. " +
-    "Returns: time context (hour/period/day), persona (3 behavioral traits + taste text), " +
+    "Returns: time context (hour/period/day), persona (3 manual traits + taste text), " +
     "and history (recent plays + top artists/tags stats). " +
     "Use this to understand the listener's taste before calling discover(). " +
-    "Update persona taste text via update_persona() when you learn new preferences.",
+    "Update persona taste text via update_persona() and manual trait controls via set_persona_traits().",
     {},
     async () => handleGetSessionState(),
   );
 
   server.tool(
     "update_persona",
-    "Update the listener's music taste description. Call this when the user explicitly mentions " +
+    "Update the listener's music taste description only. Call this when the user explicitly mentions " +
     "a music preference, or when you want to record taste insights learned from listening patterns. " +
     "The taste text is free-form natural language describing what genres, artists, moods, and " +
-    "styles the listener prefers. This persists across sessions.",
+    "styles the listener prefers. This persists across sessions and does not change persona traits.",
     {
       taste: z.string().max(1000).describe(
         "Free text taste description, e.g. 'Likes ambient, piano, post-rock. Evenings prefer acoustic.'. Use an empty string to clear it."
       ),
     },
     async (args) => handleUpdatePersona(args),
+  );
+
+  server.tool(
+    "set_persona_traits",
+    "Set the listener's manual persona traits. These stored values are the source of truth for session state " +
+    "and lightly steer discover ranking until changed again.",
+    {
+      exploration: z.number().min(0).max(1).describe("How strongly discovery should favor unfamiliar artists (0-1)."),
+      variety: z.number().min(0).max(1).describe("How strongly discovery should avoid nearby repeated artists/tags (0-1)."),
+      loyalty: z.number().min(0).max(1).describe("How strongly discovery should favor familiar artists and proven tracks (0-1)."),
+    },
+    async (args) => handleSetPersonaTraits(args),
   );
 }
 

@@ -165,3 +165,40 @@ test('rankCandidates breaks same-artist clusters after sorting', () => {
     cleanupDb(dbPath);
   }
 });
+
+test('rankCandidates uses high variety to avoid repeating nearby tags', () => {
+  const dbPath = getTempDbPath();
+  let store: HistoryStore | null = null;
+  try {
+    store = new HistoryStore(dbPath);
+    for (let index = 0; index < 8; index += 1) {
+      seedPlay(store, { title: `Ambient ${index}`, artist: `Familiar ${index % 2}`, tags: ['ambient'] });
+    }
+    for (let index = 0; index < 2; index += 1) {
+      seedPlay(store, { title: `Focus ${index}`, artist: `Focus Seed ${index}`, tags: ['focus'] });
+    }
+
+    const candidates = [
+      candidate('Ambient Return One', 'Familiar 0', ['ambient']),
+      candidate('Ambient Return Two', 'Familiar 1', ['ambient']),
+      candidate('Focus Detour', 'Focus Explorer', ['focus']),
+    ];
+
+    const lowVariety = rankCandidates(
+      candidates,
+      { loyalty: 1, exploration: 0, variety: 0 },
+      store,
+    );
+    const highVariety = rankCandidates(
+      candidates,
+      { loyalty: 1, exploration: 0, variety: 1 },
+      store,
+    );
+
+    assert.deepEqual(lowVariety.slice(0, 2).map((entry) => entry.tags[0]), ['ambient', 'ambient']);
+    assert.equal(highVariety[1]?.title, 'Focus Detour');
+  } finally {
+    store?.close();
+    cleanupDb(dbPath);
+  }
+});

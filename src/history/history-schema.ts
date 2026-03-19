@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS session_state (
   taste_state_json TEXT DEFAULT '{}',
   agent_persona_json TEXT DEFAULT '{}',
   current_intent_json TEXT DEFAULT '{}',
-  persona_taste_text TEXT DEFAULT ''
+  persona_taste_text TEXT DEFAULT '',
+  persona_traits_json TEXT DEFAULT '{"exploration":0.5,"variety":0.5,"loyalty":0.5}'
 );
 
 CREATE TABLE IF NOT EXISTS provider_cache (

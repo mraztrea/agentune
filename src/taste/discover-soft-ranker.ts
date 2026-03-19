@@ -10,6 +10,12 @@ export interface RankingContext {
   hasSparseHistory: boolean;
 }
 
+interface ScoredCandidate {
+  candidate: DiscoverCandidate;
+  index: number;
+  score: number;
+}
+
 const DEFAULT_COMPLETION_AFFINITY = 0.5;
 const MIN_HISTORY_FOR_FULL_SCORING = 10;
 
@@ -32,14 +38,15 @@ export function rankCandidates(
   const rankingContext = buildRankingContext(store);
   const trackStats = loadTrackStats(store, candidates);
 
-  const scoredCandidates = candidates.map((candidate, index) => ({
+  const scoredCandidates: ScoredCandidate[] = candidates.map((candidate, index) => ({
     candidate,
     index,
     score: scoreCandidate(candidate, traits, rankingContext, trackStats),
   }));
 
   scoredCandidates.sort((left, right) => right.score - left.score || left.index - right.index);
-  return breakArtistClusters(scoredCandidates.map((entry) => entry.candidate));
+  const varietyAdjustedCandidates = applyVarietyDiversityPass(scoredCandidates, traits.variety);
+  return breakArtistClusters(varietyAdjustedCandidates.map((entry) => entry.candidate));
 }
 
 function loadTrackStats(
@@ -126,6 +133,77 @@ function getTrackStats(
     avgCompletion: clamp(stats.avgCompletion),
     skipRate: clamp(stats.skipRate),
   };
+}
+
+function applyVarietyDiversityPass(
+  scoredCandidates: ScoredCandidate[],
+  variety: number,
+): ScoredCandidate[] {
+  const lookahead = getVarietyLookahead(variety);
+  if (lookahead <= 1 || scoredCandidates.length <= 2) {
+    return [...scoredCandidates];
+  }
+
+  const ordered: ScoredCandidate[] = [];
+  const remaining = [...scoredCandidates];
+
+  while (remaining.length > 0) {
+    const recentCandidates = ordered.slice(-2).map((entry) => entry.candidate);
+    const scanLimit = Math.min(remaining.length, lookahead);
+    let bestIndex = 0;
+    let bestAdjustedScore = getVarietyAdjustedScore(remaining[0], recentCandidates, variety);
+
+    for (let index = 1; index < scanLimit; index += 1) {
+      const adjustedScore = getVarietyAdjustedScore(remaining[index], recentCandidates, variety);
+      if (adjustedScore > bestAdjustedScore) {
+        bestIndex = index;
+        bestAdjustedScore = adjustedScore;
+      }
+    }
+
+    ordered.push(remaining.splice(bestIndex, 1)[0]);
+  }
+
+  return ordered;
+}
+
+function getVarietyLookahead(variety: number): number {
+  if (variety < 0.34) return 1;
+  if (variety < 0.67) return 3;
+  return 5;
+}
+
+function getVarietyAdjustedScore(
+  entry: ScoredCandidate,
+  recentCandidates: DiscoverCandidate[],
+  variety: number,
+): number {
+  return entry.score - (computeVarietyPenalty(entry.candidate, recentCandidates) * variety * 0.14);
+}
+
+function computeVarietyPenalty(
+  candidate: DiscoverCandidate,
+  recentCandidates: DiscoverCandidate[],
+): number {
+  if (recentCandidates.length === 0) return 0;
+
+  let penalty = 0;
+  const normalizedArtist = normalizeValue(candidate.artist);
+  const recentArtists = new Set(recentCandidates.map((recentCandidate) => normalizeValue(recentCandidate.artist)));
+  if (recentArtists.has(normalizedArtist)) {
+    penalty += 1;
+  }
+
+  const normalizedTags = [...new Set(candidate.tags.map((tag) => normalizeValue(tag)).filter(Boolean))];
+  if (normalizedTags.length === 0) {
+    return penalty;
+  }
+
+  const recentTags = new Set(
+    recentCandidates.flatMap((recentCandidate) => recentCandidate.tags.map((tag) => normalizeValue(tag)).filter(Boolean)),
+  );
+  const overlappingTags = normalizedTags.filter((tag) => recentTags.has(tag)).length;
+  return penalty + (overlappingTags / normalizedTags.length);
 }
 
 function breakArtistClusters(candidates: DiscoverCandidate[]): DiscoverCandidate[] {

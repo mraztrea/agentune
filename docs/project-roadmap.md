@@ -10,6 +10,7 @@
 - Apple-first resolution flow: complete
 - flat Apple-only discover rewrite: implemented
 - agent-first state redesign: complete
+- hard manual persona traits: complete
 - discover rewrite automated validation: complete
 - daemon/MCP end-to-end smoke record: pending
 
@@ -17,7 +18,7 @@ Last validated:
 
 - `2026-03-19`
 - `npm run build`: passed
-- `npm test`: 93 passed, 0 failed
+- `npm test`: 97 passed, 0 failed
 - built-handler smoke: `discover({ artist: "Nils Frahm", limit: 1 })` returned a paginated Apple candidate
 
 ## Completed Milestones
@@ -40,7 +41,7 @@ Last validated:
 - live playback state
 - queue preview
 - volume and mute controls
-- persona editor with trait bars
+- persona editor with manual trait controls
 - `/api/persona` and WebSocket persona sync
 
 ### State Redesign
@@ -50,10 +51,12 @@ Last validated:
   - `context`
   - `persona` (`exploration`, `variety`, `loyalty`, `taste`)
   - `history`
+- persisted manual persona traits are now the source of truth for session state, dashboard state, and discover nudges
 - replaced grouped discover lanes with flat paginated Apple-only discover output
 - added soft ranking from persona traits + history plus snapshot pagination cache
 - kept `mode` / `intent` accepted but ignored for one compatibility cycle
 - added `update_persona`
+- added `set_persona_traits`
 
 ## Active Focus
 
@@ -88,7 +91,7 @@ Next work:
 ## Near-Term Backlog
 
 - more direct MCP coverage around discover pagination and cache invalidation
-- better dashboard HTTP/WebSocket coverage
+- more daemon/proxy end-to-end coverage for persona updates
 - optional richer dashboard controls
 - publish checklist for npm release
 

@@ -204,6 +204,13 @@ button {
   font-size: 0.82rem;
 }
 
+.config-help {
+  margin: -4px 0 8px;
+  color: #9ca9c8;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .config-body textarea {
   width: 100%;
   padding: 12px 14px;
@@ -232,6 +239,17 @@ button {
   cursor: pointer;
 }
 
+.persona-message {
+  min-height: 1.2em;
+  margin: -4px 0 8px;
+  font-size: 0.88rem;
+  color: #9ca9c8;
+}
+
+.persona-message.is-error {
+  color: #ff9d9d;
+}
+
 .trait-row {
   display: grid;
   grid-template-columns: 100px 1fr 48px;
@@ -244,19 +262,9 @@ button {
   color: #aab6d5;
 }
 
-.trait-bar {
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-}
-
-.trait-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #1db954, #74f4a8);
-  transition: width 300ms ease;
-  width: 50%;
+.trait-row input[type="range"] {
+  width: 100%;
+  accent-color: #1db954;
 }
 
 .trait-val {
@@ -279,5 +287,13 @@ button {
   .hero-card,
   .queue-card {
     border-radius: 24px;
+  }
+
+  .trait-row {
+    grid-template-columns: 1fr;
+  }
+
+  .trait-val {
+    text-align: left;
   }
 }

@@ -83,7 +83,7 @@ function createPipeline(apple: FakeAppleProvider, store = createStore()): Discov
   return new DiscoverPipeline(
     batchBuilder,
     store as never,
-    { computeTraits: () => ({ exploration: 0.5, variety: 0.5, loyalty: 0.5 }) },
+    { getTraits: () => ({ exploration: 0.5, variety: 0.5, loyalty: 0.5 }) },
     new DiscoverPaginationCache(),
   );
 }

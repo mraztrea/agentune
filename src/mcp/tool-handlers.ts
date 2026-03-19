@@ -330,13 +330,36 @@ export async function handleUpdatePersona(args: { taste: string }): Promise<Tool
 
     return textResult({
       updated: true,
-      persona: {
-        traits: taste.computeTraits(),
-        taste: text,
-      },
+      persona: taste.getPersona(),
       message: 'Persona taste updated.',
     });
   } catch (err) {
     return errorResult(`Update persona failed: ${(err as Error).message}`);
+  }
+}
+
+export async function handleSetPersonaTraits(args: {
+  exploration: number;
+  variety: number;
+  loyalty: number;
+}): Promise<ToolResult> {
+  try {
+    const taste = getTasteEngine();
+    if (!taste) return errorResult('Taste engine not initialized.');
+
+    const traits = taste.saveTraits(args);
+    invalidateDiscoverCache();
+    getWebServer()?.broadcastPersona();
+
+    return textResult({
+      updated: true,
+      persona: {
+        traits,
+        taste: taste.getTasteText(),
+      },
+      message: 'Manual persona traits updated.',
+    });
+  } catch (err) {
+    return errorResult(`Set persona traits failed: ${(err as Error).message}`);
   }
 }

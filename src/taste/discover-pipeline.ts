@@ -33,7 +33,7 @@ export class DiscoverPipeline {
   constructor(
     private readonly batchBuilder: DiscoverBatchBuilder,
     private readonly store: Pick<HistoryStore, 'getTopArtists' | 'getTopTags' | 'getRecentPlaysDetailed' | 'batchGetTrackStats'>,
-    private readonly tasteEngine: Pick<TasteEngine, 'computeTraits'>,
+    private readonly tasteEngine: Pick<TasteEngine, 'getTraits'>,
     private readonly cache: DiscoverPaginationCache,
   ) {}
 
@@ -59,7 +59,7 @@ export class DiscoverPipeline {
     }
 
     const dedupedCandidates = mergeAndDedup(rawCandidates);
-    const rankedCandidates = rankCandidates(dedupedCandidates, this.tasteEngine.computeTraits(), this.store);
+    const rankedCandidates = rankCandidates(dedupedCandidates, this.tasteEngine.getTraits(), this.store);
     this.cache.setSnapshot(cacheParams, rankedCandidates);
 
     const pagedCandidates = this.cache.getPage(cacheParams, page, limit);
@@ -114,7 +114,7 @@ let discoverPipeline: DiscoverPipeline | null = null;
 export function createDiscoverPipeline(
   batchBuilder: DiscoverBatchBuilder,
   store: Pick<HistoryStore, 'getTopArtists' | 'getTopTags' | 'getRecentPlaysDetailed' | 'batchGetTrackStats'>,
-  tasteEngine: Pick<TasteEngine, 'computeTraits'>,
+  tasteEngine: Pick<TasteEngine, 'getTraits'>,
   cache = getDiscoverPaginationCache(),
 ): DiscoverPipeline {
   if (!discoverPipeline) {

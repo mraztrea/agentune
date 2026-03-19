@@ -7,7 +7,7 @@
 - Agents talk to the daemon through MCP.
 - The daemon owns queue state, playback, listening history, and the browser dashboard.
 - `mpv` handles audio output.
-- SQLite stores tracks, play events, provider cache data, and persisted persona taste text.
+- SQLite stores tracks, play events, provider cache data, persisted persona taste text, and persisted manual persona traits.
 
 The active state redesign is agent-first:
 
@@ -25,7 +25,7 @@ The active state redesign is agent-first:
 }
 ```
 
-`discover()` now returns a flat paginated list of Apple candidates. The server builds Apple-only batches, deduplicates them, soft-ranks them from history plus persona traits, caches the ranked snapshot, then returns the requested page.
+`discover()` now returns a flat paginated list of Apple candidates. The server builds Apple-only batches, deduplicates them, soft-ranks them from history plus stored manual persona traits, caches the ranked snapshot, then returns the requested page.
 
 ## Project Structure
 
@@ -102,6 +102,7 @@ Current responsibilities:
 
 - persist `tracks`, `plays`, `provider_cache`, and `session_state`
 - store free-text persona taste in `session_state.persona_taste_text`
+- store manual persona traits in `session_state.persona_traits_json`
 - keep older `lane_json`, `taste_state_json`, `agent_persona_json`, and `current_intent_json` columns for compatibility
 - expose aggregate queries used by the taste engine and discover pipeline:
   - `getRecentPlaysDetailed()`
@@ -113,7 +114,7 @@ Current responsibilities:
 Important details:
 
 - `normalizeTrackId(artist, title)` is the canonical track key.
-- The constructor performs a runtime migration to add `persona_taste_text` when an older database is opened.
+- The constructor performs runtime migrations to add `persona_taste_text` and `persona_traits_json` when an older database is opened.
 - `preferences` still exists in schema, but it is not the active persona model.
 
 ### Taste Engine
@@ -122,20 +123,15 @@ File: `src/taste/taste-engine.ts`
 
 Current responsibilities:
 
-- compute the three behavioral traits on demand
 - expose current time context
+- read and persist manual persona traits
 - read and persist free-text taste text
 - package the agent-facing session summary for MCP and the dashboard
 
-Traits:
-
-- `exploration`: recent unique artists with low historical play counts
-- `variety`: normalized Shannon entropy of recent tags
-- `loyalty`: replayed high-completion tracks in recent history
-
 Important details:
 
-- Traits default to `0.5` until there are at least 10 recent plays.
+- Traits default to `{ exploration: 0.5, variety: 0.5, loyalty: 0.5 }`.
+- Traits stay fixed until the agent or dashboard updates them.
 - The engine does not run a feedback scoring loop.
 - There is no active weighted taste runtime outside the returned summary.
 
@@ -181,6 +177,9 @@ State-related MCP tools:
 - `update_persona({ taste })`
   - persists free-text taste text
   - empty string is allowed to clear it
+- `set_persona_traits({ exploration, variety, loyalty })`
+  - persists the full manual trait object
+  - invalidates discover pagination snapshots
 
 Playback-related MCP tools:
 
@@ -201,6 +200,7 @@ Important details:
 - `mode` and `intent` remain in the MCP schema for compatibility, but the current discover pipeline ignores them.
 - Successful `play_song()` and `add_song()` clear the discover pagination cache.
 - `update_persona()` persists taste text and broadcasts persona updates, but does not clear the discover pagination cache.
+- `set_persona_traits()` persists traits, broadcasts persona updates, and clears the discover pagination cache.
 - Discover ranking is internal only; the public MCP response does not expose scores.
 
 ## Queue and Playback
@@ -253,11 +253,12 @@ Current behavior:
   - queue preview
   - volume and mute controls
   - persona textarea
-  - read-only trait bars
+  - editable manual trait sliders
 
 Important details:
 
 - The old dashboard context badge is gone.
+- `POST /api/persona` accepts `taste`, `traits`, or both in one validated payload.
 - `public/app.js` loads initial playback and persona state with HTTP, then listens for live `state` and `persona` messages.
 
 ## Tests and Validation

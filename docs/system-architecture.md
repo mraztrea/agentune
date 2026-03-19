@@ -6,7 +6,7 @@
 
 1. Coding agents connect through MCP.
 2. The daemon owns playback, queue state, listening history, and the browser dashboard.
-3. `mpv` handles audio playback; SQLite stores durable history and persona text.
+3. `mpv` handles audio playback; SQLite stores durable history, persona text, and manual persona traits.
 
 ```
 Agent / MCP Client
@@ -48,6 +48,7 @@ Responsibilities:
 
 - Persist tracks and play events in SQLite
 - Persist free-text persona taste in `session_state.persona_taste_text`
+- Persist manual persona traits in `session_state.persona_traits_json`
 - Expose aggregate history queries for the taste engine and MCP tools
 - Keep backward-compatible legacy session columns without using them in the new state model
 
@@ -62,7 +63,7 @@ Tables:
 Important notes:
 
 - `normalizeTrackId(artist, title)` is the canonical identity key.
-- The constructor now performs a runtime migration to add `persona_taste_text` when an older DB is opened.
+- The constructor now performs runtime migrations to add `persona_taste_text` and `persona_traits_json` when an older DB is opened.
 
 ### Taste Engine
 
@@ -86,15 +87,14 @@ The redesign replaced the older weighted taste model with a smaller agent-first 
 
 Behavior:
 
-- `exploration`: derived from recent artists with low historical play counts
-- `variety`: normalized tag entropy across recent plays
-- `loyalty`: ratio of replayed high-completion tracks
+- `exploration`, `variety`, and `loyalty` are stored manual controls
 - `taste`: editable free-text description stored in SQLite
+- `history`: still returned as context for the agent, but no longer defines traits
 
 Important constraints:
 
-- Traits default to `0.5` when history is too small.
-- Traits are computed on demand; there is no incremental scoring loop.
+- Traits default to `{ exploration: 0.5, variety: 0.5, loyalty: 0.5 }`.
+- Traits stay fixed until updated by MCP or the dashboard.
 - Older structured persona/session objects are no longer part of the active runtime contract.
 
 ### Discovery Pipeline
@@ -118,6 +118,7 @@ Behavior:
 - Pagination snapshots are cached in memory per normalized `{ artist, genres }` key, with a 5 minute TTL, 10-entry cap, and no empty-result caching.
 - Successful `play_song()` and `add_song()` invalidate the discover cache.
 - `update_persona()` does not invalidate the discover cache.
+- `set_persona_traits()` invalidates the discover cache because traits change ranking.
 
 ### MCP Surface
 
@@ -135,6 +136,9 @@ State-related tools:
 - `update_persona({ taste })`
   - persists free-text taste text
   - empty string is allowed to clear the value
+- `set_persona_traits({ exploration, variety, loyalty })`
+  - persists the full manual trait object
+  - invalidates discover snapshots
 
 Playback tools remain queue-first:
 
@@ -191,35 +195,38 @@ Dashboard features:
 - queue preview
 - volume + mute controls
 - persona textarea
-- read-only trait bars
+- manual trait sliders
 
 Important notes:
 
 - The dashboard no longer renders context badges.
-- Persona changes can arrive through HTTP or WebSocket and are broadcast to connected clients.
+- `POST /api/persona` accepts `taste`, `traits`, or both in one validated request.
+- Persona changes are broadcast to connected clients over WebSocket.
+- Dashboard taste edits can arrive through WebSocket, but manual trait edits currently arrive through `POST /api/persona` or MCP `set_persona_traits()`.
 
 ## Main Flows
 
 ### Read Session State
 
 1. Agent calls `get_session_state()`.
-2. The taste engine reads recent history and aggregate stats from SQLite.
-3. The tool returns time context, computed traits, stored taste text, recent plays, top artists, and top tags.
+2. The taste engine reads stored manual traits plus recent history and aggregate stats from SQLite.
+3. The tool returns time context, stored traits, stored taste text, recent plays, top artists, and top tags.
 
 ### Discover Music
 
 1. Agent optionally calls `get_session_state()` first.
 2. Agent calls `discover(page?, limit?, artist?, genres?)`.
 3. `DiscoverPipeline` checks the pagination cache for the normalized `{ artist, genres }` seed set.
-4. On cache miss, the pipeline builds Apple-only batches, deduplicates them, soft-ranks them, stores the snapshot, and slices the requested page.
+4. On cache miss, the pipeline builds Apple-only batches, deduplicates them, soft-ranks them from history plus stored manual traits, stores the snapshot, and slices the requested page.
 5. Agent chooses a track and calls `add_song()` or `play_song()`.
 
 ### Update Persona
 
 1. Agent calls `update_persona({ taste })` or the dashboard posts `/api/persona`.
-2. The taste engine writes the value to `session_state.persona_taste_text`.
-3. Updated traits + taste are broadcast to dashboard clients.
-4. Existing discover snapshots stay cached until TTL expiry, eviction, or a later `play_song()` / `add_song()` invalidation.
+2. The taste engine writes taste text to `session_state.persona_taste_text`.
+3. Manual traits can be updated through `set_persona_traits()` or `/api/persona` with a full `traits` object.
+4. Updated persona state is broadcast to dashboard clients.
+5. Trait updates invalidate discover snapshots immediately; taste-only updates do not.
 
 ### Playback Feedback
 

@@ -69,11 +69,13 @@ Then ask Claude Code:
 > "Play Blinding Lights by The Weeknd right now"
 > "What song is playing?"
 > "Skip to the next track"
+> "Set persona traits to exploration 0.8, variety 0.7, loyalty 0.3"
 
 Current `discover` contract:
 - `discover(page?, limit?, artist?, genres?)` returns a flat page of Apple candidates.
 - `discover(page=2)` continues the same cached snapshot when more results exist.
 - Legacy `mode` and `intent` params are still accepted for compatibility, but ignored.
+- `set_persona_traits({ exploration, variety, loyalty })` updates the stored manual trait controls discover uses for light ranking nudges.
 
 ### Browser Dashboard
 
@@ -81,7 +83,7 @@ Open http://localhost:3737 in your browser to see:
 - Now-playing track (title, artist, progress)
 - Volume slider
 - Live queue preview
-- Persona editor + auto-computed listening traits
+- Persona editor + manual stored listening traits
 
 ## Architecture Overview
 
