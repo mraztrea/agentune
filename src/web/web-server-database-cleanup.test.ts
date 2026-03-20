@@ -182,3 +182,28 @@ test('WebServer fails startup when exact configured port is busy', async () => {
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
   }
 });
+
+test('WebServer stop endpoint schedules explicit daemon shutdown', async () => {
+  const stopReasons: string[] = [];
+  const webServer = createWebServer(new CleanupFakeMpv() as never, new QueueManager(), {
+    onStopDaemon: (reason) => {
+      stopReasons.push(reason);
+    },
+    port: await getAvailablePort(),
+  });
+  await webServer.waitUntilReady();
+
+  try {
+    const response = await fetch(`${webServer.getDashboardUrl()}/api/daemon/stop`, { method: 'POST' });
+    const payload = await response.json() as { stopped: boolean; message: string };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.stopped, true);
+    assert.match(payload.message, /dashboard will stay offline/i);
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepEqual(stopReasons, ['dashboard stop']);
+  } finally {
+    await webServer.destroy();
+  }
+});

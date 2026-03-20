@@ -63,8 +63,8 @@
 
       <section class="danger-card">
         <div class="card-head">
-          <h2>Database</h2>
-          <span>Manual cleanup only</span>
+          <h2>Maintenance</h2>
+          <span>Manual actions only</span>
         </div>
         <div class="danger-grid">
           <div class="database-stats">
@@ -86,11 +86,15 @@
             </div>
           </div>
           <div class="danger-actions">
-            <p class="config-help">Actions stop playback, clear runtime queue state, then mutate SQLite.</p>
+            <p class="config-help">Database actions stop playback, clear runtime queue state, then mutate SQLite.</p>
             <div class="danger-button-row">
               <button data-db-action="clear-history" type="button" class="danger-button">Clear history</button>
               <button data-db-action="clear-provider-cache" type="button" class="danger-button subtle-button">Clear provider cache</button>
               <button data-db-action="full-reset" type="button" class="danger-button hard-danger">Full reset</button>
+            </div>
+            <p class="config-help">Daemon stays alive until you stop it explicitly.</p>
+            <div class="danger-button-row">
+              <button data-stop-daemon type="button" class="danger-button hard-danger">Stop daemon</button>
             </div>
             <p class="persona-message" data-database-message aria-live="polite"></p>
           </div>

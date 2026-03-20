@@ -150,6 +150,13 @@ button {
   cursor: pointer;
 }
 
+button:disabled,
+input:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .card-head h2,
 .queue-list {
   margin: 0;

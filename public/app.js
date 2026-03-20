@@ -18,17 +18,20 @@ const elements = {
   databaseProviderCache: document.querySelector('[data-db-provider-cache]'),
   databaseMessage: document.querySelector('[data-database-message]'),
   databaseActions: Array.from(document.querySelectorAll('[data-db-action]')),
+  stopDaemon: document.querySelector('[data-stop-daemon]'),
 };
 
 let socket;
-let armedDatabaseAction = null;
-let databaseArmTimer = null;
+let armedDangerAction = null;
+let dangerArmTimer = null;
+let daemonStoppedByUser = false;
 
 const DATABASE_ACTION_LABELS = {
   'clear-history': 'Clear history',
   'clear-provider-cache': 'Clear provider cache',
   'full-reset': 'Full reset',
 };
+const STOP_DAEMON_LABEL = 'Stop daemon';
 
 function formatTime(totalSeconds) {
   const minutes = Math.floor(totalSeconds / 60);
@@ -81,6 +84,9 @@ function connect() {
   });
 
   socket.addEventListener('close', () => {
+    if (daemonStoppedByUser) {
+      return;
+    }
     window.setTimeout(connect, 1000);
   });
 }
@@ -113,27 +119,31 @@ function showDatabaseMessage(message, isError = false) {
   elements.databaseMessage.classList.toggle('is-error', isError);
 }
 
-function resetDatabaseActionArming() {
-  armedDatabaseAction = null;
-  if (databaseArmTimer) {
-    window.clearTimeout(databaseArmTimer);
-    databaseArmTimer = null;
+function resetDangerActionArming() {
+  armedDangerAction = null;
+  if (dangerArmTimer) {
+    window.clearTimeout(dangerArmTimer);
+    dangerArmTimer = null;
   }
   for (const button of elements.databaseActions) {
     button.classList.remove('is-armed');
     button.textContent = DATABASE_ACTION_LABELS[button.dataset.dbAction];
   }
+  elements.stopDaemon.classList.remove('is-armed');
+  elements.stopDaemon.textContent = STOP_DAEMON_LABEL;
 }
 
-function armDatabaseAction(button, action) {
-  resetDatabaseActionArming();
-  armedDatabaseAction = action;
+function armDangerAction(button, action) {
+  resetDangerActionArming();
+  armedDangerAction = action;
   button.classList.add('is-armed');
-  button.textContent = `Confirm ${DATABASE_ACTION_LABELS[action]}`;
+  button.textContent = action.kind === 'daemon'
+    ? `Confirm ${STOP_DAEMON_LABEL}`
+    : `Confirm ${DATABASE_ACTION_LABELS[action.id]}`;
   showDatabaseMessage('Click the same button again within 5 seconds to confirm.');
-  databaseArmTimer = window.setTimeout(() => {
-    resetDatabaseActionArming();
-    showDatabaseMessage('Cleanup confirmation expired.');
+  dangerArmTimer = window.setTimeout(() => {
+    resetDangerActionArming();
+    showDatabaseMessage('Confirmation expired.');
   }, 5000);
 }
 
@@ -161,12 +171,58 @@ async function runDatabaseAction(action, button) {
 
     renderDatabaseStats(data.stats);
     showDatabaseMessage(data.message ?? 'Cleanup complete.');
-    resetDatabaseActionArming();
+    resetDangerActionArming();
   } catch (err) {
     showDatabaseMessage(err.message ?? 'Database cleanup failed.', true);
   } finally {
     button.disabled = false;
     await loadDatabaseStats();
+  }
+}
+
+function disableControlsAfterStop() {
+  daemonStoppedByUser = true;
+  elements.volume.disabled = true;
+  elements.mute.disabled = true;
+  elements.taste.disabled = true;
+  elements.saveTaste.disabled = true;
+  elements.stopDaemon.disabled = true;
+  for (const button of elements.databaseActions) {
+    button.disabled = true;
+  }
+}
+
+function applyStoppedState(message) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.close();
+  }
+  disableControlsAfterStop();
+  elements.title.textContent = 'Daemon stopped';
+  elements.artist.textContent = 'Open a new coding session to start sbotify again.';
+  elements.state.textContent = 'Stopped';
+  elements.currentTime.textContent = '0:00';
+  elements.duration.textContent = '0:00';
+  elements.progress.style.width = '0%';
+  elements.queue.innerHTML = '<li class="queue-empty">Daemon is stopped</li>';
+  showDatabaseMessage(message);
+  showPersonaMessage('Daemon stopped. This page will stay offline until sbotify starts again.');
+}
+
+async function runDaemonStop(button) {
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/daemon/stop', { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message ?? 'Daemon stop failed.');
+    }
+
+    resetDangerActionArming();
+    applyStoppedState(data.message ?? 'Daemon stop requested.');
+  } catch (err) {
+    resetDangerActionArming();
+    button.disabled = false;
+    showDatabaseMessage(err.message ?? 'Daemon stop failed.', true);
   }
 }
 
@@ -195,17 +251,27 @@ elements.saveTaste.addEventListener('click', () => {
 
 for (const button of elements.databaseActions) {
   button.addEventListener('click', async () => {
-    const action = button.dataset.dbAction;
-    if (!action) {
+    const actionId = button.dataset.dbAction;
+    if (!actionId) {
       return;
     }
-    if (armedDatabaseAction !== action) {
-      armDatabaseAction(button, action);
+    const action = { kind: 'database', id: actionId };
+    if (!armedDangerAction || armedDangerAction.kind !== action.kind || armedDangerAction.id !== action.id) {
+      armDangerAction(button, action);
       return;
     }
-    await runDatabaseAction(action, button);
+    await runDatabaseAction(actionId, button);
   });
 }
+
+elements.stopDaemon.addEventListener('click', async () => {
+  const action = { kind: 'daemon', id: 'stop-daemon' };
+  if (!armedDangerAction || armedDangerAction.kind !== action.kind) {
+    armDangerAction(elements.stopDaemon, action);
+    return;
+  }
+  await runDaemonStop(elements.stopDaemon);
+});
 
 fetch('/api/status')
   .then((response) => response.json())

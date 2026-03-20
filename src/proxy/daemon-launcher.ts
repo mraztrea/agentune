@@ -34,7 +34,8 @@ function spawnDaemon(): void {
   const logFd = openSync(logPath, 'w');
 
   const child = spawn(process.execPath, [entryPoint, '--daemon'], {
-    detached: process.platform !== 'win32', // Unix: setsid for session independence; Windows: skip to avoid console popup
+    // Keep the daemon alive after the proxy terminal exits on every platform.
+    detached: true,
     windowsHide: true,
     stdio: ['ignore', logFd, logFd],
     env: { ...process.env },

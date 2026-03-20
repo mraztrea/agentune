@@ -152,19 +152,12 @@ function isInitializeRequest(body: unknown): boolean {
   return (body as Record<string, unknown>)?.method === 'initialize';
 }
 
-/** Session lifecycle callbacks for daemon idle-shutdown */
-export interface McpSessionCallbacks {
-  onSessionCreated?: () => void;
-  onAllSessionsClosed?: () => void;
-}
-
 /** Create an HTTP MCP handler for daemon mode — manages per-session transports */
-export function createHttpMcpHandler(callbacks?: McpSessionCallbacks): {
+export function createHttpMcpHandler(): {
   handleRequest: (req: IncomingMessage, res: ServerResponse, body?: unknown) => Promise<void>;
   close: () => Promise<void>;
 } {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
-  let hadSession = false;
 
   return {
     async handleRequest(req, res, body) {
@@ -176,16 +169,11 @@ export function createHttpMcpHandler(callbacks?: McpSessionCallbacks): {
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
             sessions.set(sid, transport);
-            hadSession = true;
-            callbacks?.onSessionCreated?.();
           },
         });
         transport.onclose = () => {
           const sid = transport.sessionId;
           if (sid) sessions.delete(sid);
-          if (sessions.size === 0 && hadSession) {
-            callbacks?.onAllSessionsClosed?.();
-          }
         };
         try {
           const server = new McpServer({ name: 'sbotify', version: '0.1.0' });

@@ -14,10 +14,11 @@ import { createTasteEngine } from './taste/taste-engine.js';
 import { DaemonServer } from './daemon/daemon-server.js';
 import { writePidFile, removePidFile } from './daemon/pid-manager.js';
 import { loadRuntimeConfig } from './runtime/runtime-config.js';
+import type { WebServerOptions } from './web/web-server.js';
 
 // --- Shared bootstrap ---
 
-async function bootstrapComponents() {
+async function bootstrapComponents(webServerOptions?: Pick<WebServerOptions, 'onStopDaemon'>) {
   const runtimeConfig = loadRuntimeConfig();
 
   // Initialize history store (SQLite) — non-fatal if it fails
@@ -44,7 +45,10 @@ async function bootstrapComponents() {
 
   const mpv = createMpvController(runtimeConfig.defaultVolume);
   createQueuePlaybackController(mpv, queueManager, youtubeProvider);
-  const webServer = createWebServer(mpv, queueManager, { port: runtimeConfig.dashboardPort });
+  const webServer = createWebServer(mpv, queueManager, {
+    ...webServerOptions,
+    port: runtimeConfig.dashboardPort,
+  });
   await webServer.waitUntilReady();
 
   try {
@@ -61,9 +65,7 @@ async function bootstrapComponents() {
 
 async function startDaemon() {
   console.error('[sbotify] Starting in daemon mode...');
-  await bootstrapComponents();
   const runtimeConfig = loadRuntimeConfig();
-
   const daemonServer = new DaemonServer(runtimeConfig.daemonPort);
 
   async function daemonShutdown(reason: string) {
@@ -77,6 +79,7 @@ async function startDaemon() {
     process.exit(0);
   }
 
+  await bootstrapComponents({ onStopDaemon: daemonShutdown });
   daemonServer.setShutdownHandler(daemonShutdown);
 
   const port = await daemonServer.start();

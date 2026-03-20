@@ -24,6 +24,7 @@ const PUBLIC_DIR = fileURLToPath(new URL('../../public', import.meta.url));
 
 export interface WebServerOptions {
   historyStore?: HistoryStore;
+  onStopDaemon?: (reason: string) => void | Promise<void>;
   port?: number;
 }
 
@@ -41,6 +42,7 @@ export class WebServer {
     });
   });
   private readonly historyStore: HistoryStore | null;
+  private readonly onStopDaemon?: (reason: string) => void | Promise<void>;
   private readonly port: number;
   private readonly wsServer = new WebSocketServer({ noServer: true });
   private dashboardOpened = false;
@@ -51,6 +53,7 @@ export class WebServer {
     options?: WebServerOptions,
   ) {
     this.historyStore = options?.historyStore ?? getHistoryStore();
+    this.onStopDaemon = options?.onStopDaemon;
     this.port = options?.port ?? loadRuntimeConfig().dashboardPort;
     this.broadcaster = new StateBroadcaster(mpv, queueManager);
     this.readyPromise = this.start();
@@ -190,6 +193,11 @@ export class WebServer {
       return;
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/daemon/stop') {
+      this.handleDaemonStop(response);
+      return;
+    }
+
     if (url.pathname === '/api/database/stats' && request.method === 'GET') {
       const store = this.historyStore;
       if (!store) {
@@ -262,6 +270,21 @@ export class WebServer {
     const payload = await runDatabaseAction(action, store, getQueuePlaybackController());
     await this.broadcastStateSnapshot();
     sendJson(response, payload);
+  }
+
+  private handleDaemonStop(response: ServerResponse): void {
+    if (!this.onStopDaemon) {
+      sendJson(response, { message: 'Unavailable' }, 503);
+      return;
+    }
+
+    sendJson(response, {
+      stopped: true,
+      message: 'Daemon stop requested. This dashboard will stay offline until you start a new coding session.',
+    });
+    setTimeout(() => {
+      void Promise.resolve(this.onStopDaemon?.('dashboard stop'));
+    }, 100);
   }
 
   private handleSocketMessage(rawMessage: string): void {
