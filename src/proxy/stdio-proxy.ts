@@ -9,22 +9,30 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { DAEMON_CONTROL_TOKEN_HEADER } from '../daemon/daemon-auth.js';
 
 /** Connect stdio transport to daemon HTTP MCP endpoint and relay all traffic */
-export async function startProxy(daemonPort: number): Promise<void> {
+export async function startProxy(daemonPort: number, controlToken: string): Promise<void> {
   // Connect HTTP client to daemon
   const httpTransport = new StreamableHTTPClientTransport(
-    new URL(`http://127.0.0.1:${daemonPort}/mcp`)
+    new URL(`http://127.0.0.1:${daemonPort}/mcp`),
+    {
+      requestInit: {
+        headers: {
+          [DAEMON_CONTROL_TOKEN_HEADER]: controlToken,
+        },
+      },
+    },
   );
   const httpClient = new Client(
-    { name: 'sbotify-proxy', version: '0.1.0' },
+    { name: 'agentune-proxy', version: '0.1.0' },
     { capabilities: {} }
   );
   await httpClient.connect(httpTransport);
 
   // Create stdio-facing server for the agent
   const stdioServer = new Server(
-    { name: 'sbotify', version: '0.1.0' },
+    { name: 'agentune', version: '0.1.0' },
     { capabilities: { tools: {} } }
   );
 

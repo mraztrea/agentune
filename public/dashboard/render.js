@@ -13,6 +13,7 @@ const titleMarquee = createTitleMarquee(elements);
 let lastArtwork = '';
 let lastTitle = '';
 let lastArtist = '';
+const PLACEHOLDER_ARTWORK_URL = new URL(PLACEHOLDER_ARTWORK, window.location.href).href;
 
 applyPlaybackVisualState(document.documentElement, false, false);
 
@@ -195,8 +196,8 @@ export function applyStoppedState(message) {
   });
 
   titleMarquee.setText('Daemon stopped');
-  elements.artist.textContent = 'Run "sbotify start", or open a new coding session if auto-start is enabled.';
-  renderQueueCurrent('Daemon stopped', 'Run "sbotify start" to bring playback back online.');
+  elements.artist.textContent = 'Run "agentune start", or open a new coding session if auto-start is enabled.';
+  renderQueueCurrent('Daemon stopped', 'Run "agentune start" to bring playback back online.');
   elements.volume.value = '0';
   elements.volume.style.setProperty('--volume-progress', '0%');
   renderPlaybackProgress(0, 0);
@@ -210,13 +211,29 @@ export function applyStoppedState(message) {
   elements.queue.append(stoppedItem);
 
   showDatabaseMessage(message);
-  showPersonaMessage('Daemon stopped. This page will stay offline until sbotify starts again.');
+  showPersonaMessage('Daemon stopped. This page will stay offline until agentune starts again.');
+}
+
+export function applySessionExpiredState(message) {
+  elements.pause.disabled = true;
+  elements.next.disabled = true;
+  elements.volume.disabled = true;
+  elements.taste.disabled = true;
+  elements.saveTaste.disabled = true;
+  elements.stopDaemon.disabled = true;
+  elements.databaseActions.forEach((button) => {
+    button.disabled = true;
+  });
+
+  showDatabaseMessage(message, true);
+  showPersonaMessage(message, true);
 }
 
 function attachArtworkFallback(image) {
   image.addEventListener('error', () => {
     const fallbackSource = image.dataset.fallbackSource ?? '';
     const fallbackTried = image.dataset.fallbackTried === 'true';
+    const currentSource = image.currentSrc || image.src;
 
     if (fallbackSource && !fallbackTried) {
       image.dataset.fallbackTried = 'true';
@@ -224,7 +241,7 @@ function attachArtworkFallback(image) {
       return;
     }
 
-    if (image.src !== PLACEHOLDER_ARTWORK) {
+    if (currentSource !== PLACEHOLDER_ARTWORK_URL) {
       image.src = PLACEHOLDER_ARTWORK;
     }
   });

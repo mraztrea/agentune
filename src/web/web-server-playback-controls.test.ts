@@ -5,6 +5,7 @@ import test from 'node:test';
 import WebSocket from 'ws';
 import { createQueuePlaybackController } from '../queue/queue-playback-controller.js';
 import { QueueManager } from '../queue/queue-manager.js';
+import { getDashboardAuth } from './web-server-test-helpers.js';
 import { createWebServer } from './web-server.js';
 
 class PlaybackControlsFakeMpv extends EventEmitter {
@@ -175,8 +176,12 @@ test('WebServer websocket playback controls pause, toggle resume, and skip the c
   const webServer = createWebServer(mpv as never, queueManager, { port: await getAvailablePort() });
   webServer.openDashboardOnce = () => {};
   await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
 
-  const socket = new WebSocket(`${webServer.getDashboardUrl().replace('http', 'ws')}/ws`);
+  const socket = new WebSocket(
+    `${webServer.getDashboardUrl().replace('http', 'ws')}/ws?dashboardToken=${encodeURIComponent(auth.token)}`,
+    { headers: { Origin: auth.origin } },
+  );
   await new Promise<void>((resolve) => socket.once('open', () => resolve()));
 
   try {
@@ -209,6 +214,89 @@ test('WebServer websocket playback controls pause, toggle resume, and skip the c
     assert.equal(queueManager.getNowPlaying()?.title, nextTrack.title);
   } finally {
     socket.close();
+    await webServer.destroy();
+  }
+});
+
+test('WebServer volume endpoint clamps out-of-range values and rejects malformed payloads', async () => {
+  const queueManager = new QueueManager();
+  const mpv = new PlaybackControlsFakeMpv();
+  const webServer = createWebServer(mpv as never, queueManager, { port: await getAvailablePort() });
+  await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
+
+  try {
+    const lowResponse = await fetch(`${webServer.getDashboardUrl()}/api/volume`, {
+      method: 'POST',
+      headers: { ...auth.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: -15 }),
+    });
+    const lowPayload = await lowResponse.json() as { volume: number };
+    assert.equal(lowResponse.status, 200);
+    assert.equal(lowPayload.volume, 0);
+    assert.equal(mpv.getVolume(), 0);
+
+    const highResponse = await fetch(`${webServer.getDashboardUrl()}/api/volume`, {
+      method: 'POST',
+      headers: { ...auth.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: 180 }),
+    });
+    const highPayload = await highResponse.json() as { volume: number };
+    assert.equal(highResponse.status, 200);
+    assert.equal(highPayload.volume, 100);
+    assert.equal(mpv.getVolume(), 100);
+
+    const invalidResponse = await fetch(`${webServer.getDashboardUrl()}/api/volume`, {
+      method: 'POST',
+      headers: { ...auth.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: null }),
+    });
+    const invalidPayload = await invalidResponse.json() as { message: string };
+    assert.equal(invalidResponse.status, 400);
+    assert.match(invalidPayload.message, /volume must be a number/i);
+  } finally {
+    await webServer.destroy();
+  }
+});
+
+test('WebServer rejects unauthenticated websocket and volume requests', async () => {
+  const queueManager = new QueueManager();
+  const mpv = new PlaybackControlsFakeMpv();
+  const webServer = createWebServer(mpv as never, queueManager, { port: await getAvailablePort() });
+  await webServer.waitUntilReady();
+
+  try {
+    const socket = new WebSocket(`${webServer.getDashboardUrl().replace('http', 'ws')}/ws`);
+    const closeCode = await new Promise<number>((resolve) => {
+      socket.once('close', (code) => resolve(code));
+    });
+    assert.equal(closeCode, 4403);
+
+    const response = await fetch(`${webServer.getDashboardUrl()}/api/volume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: 50 }),
+    });
+    assert.equal(response.status, 403);
+  } finally {
+    await webServer.destroy();
+  }
+});
+
+test('WebServer serves local SVG placeholder artwork with image mime type', async () => {
+  const queueManager = new QueueManager();
+  const mpv = new PlaybackControlsFakeMpv();
+  const webServer = createWebServer(mpv as never, queueManager, { port: await getAvailablePort() });
+  await webServer.waitUntilReady();
+
+  try {
+    const response = await fetch(`${webServer.getDashboardUrl()}/assets/agentune-mark.svg`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') ?? '', /image\/svg\+xml/i);
+    assert.match(body, /<svg/i);
+  } finally {
     await webServer.destroy();
   }
 });

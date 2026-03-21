@@ -9,7 +9,9 @@ import { HistoryStore } from '../history/history-store.js';
 import { createQueuePlaybackController } from '../queue/queue-playback-controller.js';
 import { QueueManager } from '../queue/queue-manager.js';
 import { createTasteEngine } from '../taste/taste-engine.js';
+import { getDashboardAuth } from './web-server-test-helpers.js';
 import { createWebServer } from './web-server.js';
+import { runDatabaseAction } from './web-server-database-cleanup.js';
 
 class CleanupFakeMpv extends EventEmitter {
   private state = {
@@ -70,7 +72,7 @@ class CleanupFakeMpv extends EventEmitter {
 }
 
 function getTempDbPath(): string {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbotify-web-cleanup-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentune-web-cleanup-'));
   return path.join(tmpDir, 'history.db');
 }
 
@@ -124,6 +126,7 @@ test('WebServer database cleanup endpoints stop runtime state and clear selected
     port: await getAvailablePort(),
   });
   await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
 
   try {
     const playId = store.recordPlay({ title: 'Track A', artist: 'Artist A', duration: 200, thumbnail: 'thumb', ytVideoId: 'vid-a' });
@@ -137,7 +140,9 @@ test('WebServer database cleanup endpoints stop runtime state and clear selected
     queueManager.setNowPlaying({ id: 'current', title: 'Current', artist: 'Artist C', duration: 120, thumbnail: 'thumb', url: 'url' });
     mpv.setCurrentTrack({ title: 'Current', artist: 'Artist C', duration: 120, thumbnail: 'thumb' });
 
-    const statsResponse = await fetch(`${webServer.getDashboardUrl()}/api/database/stats`);
+    const statsResponse = await fetch(`${webServer.getDashboardUrl()}/api/database/stats`, {
+      headers: auth.headers,
+    });
     const statsPayload = await statsResponse.json() as {
       stats: {
         counts: { plays: number; tracks: number; providerCache: number };
@@ -158,7 +163,10 @@ test('WebServer database cleanup endpoints stop runtime state and clear selected
     assert.equal(statsPayload.stats.insights.topKeywords[0]?.keyword, 'ambient');
     assert.equal(statsPayload.stats.insights.activity7d.reduce((sum, bucket) => sum + bucket.plays, 0), 1);
 
-    const clearHistoryResponse = await fetch(`${webServer.getDashboardUrl()}/api/database/clear-history`, { method: 'POST' });
+    const clearHistoryResponse = await fetch(`${webServer.getDashboardUrl()}/api/database/clear-history`, {
+      method: 'POST',
+      headers: auth.headers,
+    });
     const clearHistoryPayload = await clearHistoryResponse.json() as {
       updated: boolean;
       removed: { plays: number; tracks: number; providerCache: number };
@@ -187,7 +195,10 @@ test('WebServer database cleanup endpoints stop runtime state and clear selected
     assert.equal(mpv.stopCount, 1);
     assert.deepEqual(queueManager.getState(), { nowPlaying: null, queue: [], history: [] });
 
-    const clearCacheResponse = await fetch(`${webServer.getDashboardUrl()}/api/database/clear-provider-cache`, { method: 'POST' });
+    const clearCacheResponse = await fetch(`${webServer.getDashboardUrl()}/api/database/clear-provider-cache`, {
+      method: 'POST',
+      headers: auth.headers,
+    });
     const clearCachePayload = await clearCacheResponse.json() as {
       removed: { plays: number; tracks: number; providerCache: number };
       stats: {
@@ -237,18 +248,67 @@ test('WebServer stop endpoint schedules explicit daemon shutdown', async () => {
     port: await getAvailablePort(),
   });
   await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
 
   try {
-    const response = await fetch(`${webServer.getDashboardUrl()}/api/daemon/stop`, { method: 'POST' });
+    const response = await fetch(`${webServer.getDashboardUrl()}/api/daemon/stop`, {
+      method: 'POST',
+      headers: auth.headers,
+    });
     const payload = await response.json() as { stopped: boolean; message: string };
 
     assert.equal(response.status, 200);
     assert.equal(payload.stopped, true);
-    assert.match(payload.message, /sbotify start/i);
+    assert.match(payload.message, /agentune start/i);
 
     await new Promise((resolve) => setTimeout(resolve, 150));
     assert.deepEqual(stopReasons, ['dashboard stop']);
   } finally {
     await webServer.destroy();
+  }
+});
+
+test('WebServer cleanup and stop endpoints reject missing dashboard auth token', async () => {
+  const webServer = createWebServer(new CleanupFakeMpv() as never, new QueueManager(), {
+    port: await getAvailablePort(),
+  });
+  await webServer.waitUntilReady();
+
+  try {
+    const statsResponse = await fetch(`${webServer.getDashboardUrl()}/api/database/stats`);
+    assert.equal(statsResponse.status, 403);
+
+    const stopResponse = await fetch(`${webServer.getDashboardUrl()}/api/daemon/stop`, { method: 'POST' });
+    assert.equal(stopResponse.status, 403);
+  } finally {
+    await webServer.destroy();
+  }
+});
+
+test('runDatabaseAction serializes concurrent cleanup requests', async () => {
+  const dbPath = getTempDbPath();
+  const store = new HistoryStore(dbPath);
+  let activeCalls = 0;
+  let maxConcurrentCalls = 0;
+
+  try {
+    const queuePlaybackController = {
+      stopAndResetRuntimeState: async () => {
+        activeCalls += 1;
+        maxConcurrentCalls = Math.max(maxConcurrentCalls, activeCalls);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        activeCalls -= 1;
+      },
+    };
+
+    await Promise.all([
+      runDatabaseAction('clear-provider-cache', store, queuePlaybackController as never),
+      runDatabaseAction('clear-provider-cache', store, queuePlaybackController as never),
+    ]);
+
+    assert.equal(maxConcurrentCalls, 1);
+  } finally {
+    store.close();
+    cleanupDb(dbPath);
   }
 });

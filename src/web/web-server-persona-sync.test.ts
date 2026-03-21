@@ -11,6 +11,7 @@ import { getDiscoverPaginationCache, invalidateDiscoverCache } from '../taste/di
 import { handleUpdatePersona } from '../mcp/tool-handlers.js';
 import { QueueManager } from '../queue/queue-manager.js';
 import { createTasteEngine } from '../taste/taste-engine.js';
+import { getDashboardAuth } from './web-server-test-helpers.js';
 import { createWebServer } from './web-server.js';
 
 class FakeMpv extends EventEmitter {
@@ -36,7 +37,7 @@ class FakeMpv extends EventEmitter {
 }
 
 function getTempDbPath(): string {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbotify-web-sync-'));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentune-web-sync-'));
   return path.join(tmpDir, 'history.db');
 }
 
@@ -110,8 +111,12 @@ test('WebServer syncs dashboard persona API and MCP taste updates without touchi
     port: await getAvailablePort(),
   });
   await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
 
-  const socket = new WebSocket(`${webServer.getDashboardUrl().replace('http', 'ws')}/ws`);
+  const socket = new WebSocket(
+    `${webServer.getDashboardUrl().replace('http', 'ws')}/ws?dashboardToken=${encodeURIComponent(auth.token)}`,
+    { headers: { Origin: auth.origin } },
+  );
   const messages: Array<{ type?: string; data?: { taste?: string } }> = [];
   socket.on('message', (raw) => {
     messages.push(JSON.parse(raw.toString()) as { type?: string; data?: { taste?: string } });
@@ -119,7 +124,9 @@ test('WebServer syncs dashboard persona API and MCP taste updates without touchi
   await new Promise<void>((resolve) => socket.once('open', () => resolve()));
 
   try {
-    const initialResponse = await fetch(`${webServer.getDashboardUrl()}/api/persona`);
+    const initialResponse = await fetch(`${webServer.getDashboardUrl()}/api/persona`, {
+      headers: auth.headers,
+    });
     const initialPayload = await initialResponse.json() as { taste: string };
     assert.equal(initialPayload.taste, 'Initial taste');
 
@@ -138,7 +145,7 @@ test('WebServer syncs dashboard persona API and MCP taste updates without touchi
 
     const dashboardResponse = await fetch(`${webServer.getDashboardUrl()}/api/persona`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...auth.headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ taste: 'Dashboard taste' }),
     });
     const dashboardPayload = await dashboardResponse.json() as {
@@ -157,12 +164,21 @@ test('WebServer syncs dashboard persona API and MCP taste updates without touchi
 
     const invalidResponse = await fetch(`${webServer.getDashboardUrl()}/api/persona`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...auth.headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
     const invalidPayload = await invalidResponse.json() as { message: string };
     assert.equal(invalidResponse.status, 400);
     assert.match(invalidPayload.message, /taste field required/i);
+
+    const oversizedResponse = await fetch(`${webServer.getDashboardUrl()}/api/persona`, {
+      method: 'POST',
+      headers: { ...auth.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taste: 'x'.repeat(1024 * 1024) }),
+    });
+    const oversizedPayload = await oversizedResponse.json() as { message: string };
+    assert.equal(oversizedResponse.status, 400);
+    assert.match(oversizedPayload.message, /taste field required/i);
 
     const updateResult = await handleUpdatePersona({ taste: 'Updated taste' });
     assert.equal(updateResult.isError, undefined);
@@ -178,6 +194,27 @@ test('WebServer syncs dashboard persona API and MCP taste updates without touchi
     await webServer.destroy();
     store.close();
     invalidateDiscoverCache();
+    cleanupDb(dbPath);
+  }
+});
+
+test('WebServer persona API rejects missing dashboard auth token', async () => {
+  const dbPath = getTempDbPath();
+  const store = new HistoryStore(dbPath);
+  createTasteEngine(store);
+
+  const webServer = createWebServer(new FakeMpv() as never, new QueueManager(), {
+    historyStore: store,
+    port: await getAvailablePort(),
+  });
+  await webServer.waitUntilReady();
+
+  try {
+    const response = await fetch(`${webServer.getDashboardUrl()}/api/persona`);
+    assert.equal(response.status, 403);
+  } finally {
+    await webServer.destroy();
+    store.close();
     cleanupDb(dbPath);
   }
 });

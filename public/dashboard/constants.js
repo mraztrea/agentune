@@ -20,17 +20,4 @@ export const DEFAULT_THEME = {
 
 export const STOP_DAEMON_LABEL = 'Stop daemon';
 
-export const PLACEHOLDER_ARTWORK = `data:image/svg+xml,${encodeURIComponent(`
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640">
-    <defs>
-      <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#18263b" />
-        <stop offset="100%" stop-color="#090d14" />
-      </linearGradient>
-    </defs>
-    <rect width="640" height="640" rx="72" fill="url(#bg)" />
-    <circle cx="214" cy="214" r="116" fill="rgba(214,232,255,0.12)" />
-    <circle cx="408" cy="402" r="142" fill="rgba(107,160,255,0.16)" />
-    <text x="64" y="532" fill="#f4f7ff" font-family="Segoe UI, sans-serif" font-size="92" font-weight="700">sbotify</text>
-  </svg>
-`)}`;
+export const PLACEHOLDER_ARTWORK = '/assets/agentune-mark.svg';

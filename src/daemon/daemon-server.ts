@@ -3,6 +3,7 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import { handleHealthRequest } from './health-endpoint.js';
+import { DAEMON_CONTROL_TOKEN_HEADER, hasValidDaemonControlToken } from './daemon-auth.js';
 import { createHttpMcpHandler } from '../mcp/mcp-server.js';
 
 export class DaemonServer {
@@ -10,7 +11,10 @@ export class DaemonServer {
   private mcpHandler: ReturnType<typeof createHttpMcpHandler> | null = null;
   private shutdownFn: ((reason: string) => void) | null = null;
 
-  constructor(private readonly port: number) {}
+  constructor(
+    private readonly port: number,
+    private readonly controlToken: string,
+  ) {}
 
   setShutdownHandler(fn: (reason: string) => void): void {
     this.shutdownFn = fn;
@@ -29,6 +33,10 @@ export class DaemonServer {
 
       // Route: POST /shutdown
       if (req.method === 'POST' && url.pathname === '/shutdown') {
+        if (!this.hasValidControlToken(req)) {
+          sendJson(res, { error: 'Forbidden' }, 403);
+          return;
+        }
         sendJson(res, { status: 'shutting_down' });
         setTimeout(() => this.shutdownFn?.('HTTP /shutdown'), 100);
         return;
@@ -36,6 +44,10 @@ export class DaemonServer {
 
       // Route: /mcp (POST, GET, DELETE)
       if (url.pathname === '/mcp') {
+        if (!this.hasValidControlToken(req)) {
+          sendJson(res, { error: 'Forbidden' }, 403);
+          return;
+        }
         const body = req.method === 'POST' ? await readBody(req) : undefined;
         await this.mcpHandler!.handleRequest(req, res, body);
         return;
@@ -67,10 +79,14 @@ export class DaemonServer {
   getPort(): number {
     return this.port;
   }
+
+  private hasValidControlToken(req: IncomingMessage): boolean {
+    return hasValidDaemonControlToken(req.headers[DAEMON_CONTROL_TOKEN_HEADER.toLowerCase()], this.controlToken);
+  }
 }
 
-function sendJson(res: ServerResponse, data: unknown): void {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
+function sendJson(res: ServerResponse, data: unknown, statusCode = 200): void {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
 

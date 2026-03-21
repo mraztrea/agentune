@@ -1,3 +1,4 @@
+import { appendDashboardTokenToPath } from './auth.js';
 import { DEFAULT_THEME, PLACEHOLDER_ARTWORK } from './constants.js';
 
 const themeCache = new Map();
@@ -168,7 +169,9 @@ async function extractThemeWithFallback(source) {
 }
 
 export function buildArtworkUrl(source) {
-  return source ? `/api/artwork?src=${encodeURIComponent(source)}` : PLACEHOLDER_ARTWORK;
+  return source
+    ? appendDashboardTokenToPath(`/api/artwork?src=${encodeURIComponent(source)}`)
+    : PLACEHOLDER_ARTWORK;
 }
 
 export function createAmbientThemeManager(root = document.documentElement) {

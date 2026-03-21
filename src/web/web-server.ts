@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import { createReadStream, existsSync } from 'fs';
-import { stat } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { MpvController } from '../audio/mpv-controller.js';
@@ -13,15 +13,31 @@ import { StateBroadcaster } from './state-broadcaster.js';
 import { handleArtworkProxy } from './web-server-artwork-proxy.js';
 import {
   getMimeType,
-  getStaticFilePath,
   openUrl,
   readJsonBody,
   readVolumeRequest,
   sendJson,
 } from './web-server-helpers.js';
 import { getDatabaseStatsPayload, runDatabaseAction } from './web-server-database-cleanup.js';
+import {
+  createDashboardSessionToken,
+  DASHBOARD_SESSION_EXPIRED_MESSAGE,
+  hasValidDashboardHeaderToken,
+  hasValidDashboardQueryToken,
+  isAllowedDashboardMutationRequest,
+  isAllowedDashboardSocketRequest,
+  renderDashboardHtml,
+} from './web-server-auth.js';
+import { resolveStaticFilePath } from './web-server-static-file-path.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../public', import.meta.url));
+const MAX_WEBSOCKET_PAYLOAD_BYTES = 64 * 1024;
+const DASHBOARD_HTML_HEADERS = {
+  'Cache-Control': 'no-store',
+  'Content-Type': 'text/html; charset=utf-8',
+  'Referrer-Policy': 'no-referrer',
+  'X-Frame-Options': 'DENY',
+};
 
 export interface WebServerOptions {
   historyStore?: HistoryStore;
@@ -45,7 +61,11 @@ export class WebServer {
   private readonly historyStore: HistoryStore | null;
   private readonly onStopDaemon?: (reason: string) => void | Promise<void>;
   private readonly port: number;
-  private readonly wsServer = new WebSocketServer({ noServer: true });
+  private readonly dashboardSessionToken = createDashboardSessionToken();
+  private readonly wsServer = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_WEBSOCKET_PAYLOAD_BYTES,
+  });
   private dashboardOpened = false;
 
   constructor(
@@ -59,7 +79,13 @@ export class WebServer {
     this.broadcaster = new StateBroadcaster(mpv, queueManager);
     this.readyPromise = this.start();
 
-    this.wsServer.on('connection', (socket) => {
+    this.wsServer.on('connection', (socket, request) => {
+      const url = new URL(request.url ?? '/ws', this.getDashboardUrl());
+      if (!isAllowedDashboardSocketRequest(url, request.headers, this.dashboardSessionToken)) {
+        socket.close(4403, 'Dashboard auth failed');
+        return;
+      }
+
       this.sendState(socket);
       this.sendPersona(socket);
       socket.on('message', (message) => {
@@ -72,7 +98,8 @@ export class WebServer {
     });
 
     this.httpServer.on('upgrade', (request, socket, head) => {
-      if (request.url !== '/ws') {
+      const url = new URL(request.url ?? '/', this.getDashboardUrl());
+      if (url.pathname !== '/ws') {
         socket.destroy();
         return;
       }
@@ -158,6 +185,31 @@ export class WebServer {
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? '/', this.getDashboardUrl());
+    const dashboardDocumentRequested = request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html');
+
+    if (dashboardDocumentRequested) {
+      await this.handleDashboardDocument(response);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/artwork') {
+      if (!hasValidDashboardQueryToken(url, this.dashboardSessionToken)) {
+        this.sendDashboardForbidden(response);
+        return;
+      }
+      await handleArtworkProxy(url, response);
+      return;
+    }
+
+    const dashboardApiRequested = url.pathname.startsWith('/api/');
+    if (dashboardApiRequested && !hasValidDashboardHeaderToken(request.headers, this.dashboardSessionToken)) {
+      this.sendDashboardForbidden(response);
+      return;
+    }
+    if (dashboardApiRequested && request.method === 'POST' && !isAllowedDashboardMutationRequest(request.headers)) {
+      this.sendDashboardForbidden(response);
+      return;
+    }
 
     if (request.method === 'GET' && url.pathname === '/api/status') {
       sendJson(response, this.broadcaster.getState());
@@ -199,11 +251,6 @@ export class WebServer {
       return;
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/artwork') {
-      await handleArtworkProxy(url, response);
-      return;
-    }
-
     if (url.pathname === '/api/database/stats' && request.method === 'GET') {
       const store = this.historyStore;
       if (!store) {
@@ -225,8 +272,8 @@ export class WebServer {
       return;
     }
 
-    const filePath = getStaticFilePath(PUBLIC_DIR, url.pathname);
-    if (!filePath.startsWith(PUBLIC_DIR) || !existsSync(filePath)) {
+    const filePath = resolveStaticFilePath(PUBLIC_DIR, url.pathname);
+    if (!filePath || !existsSync(filePath)) {
       response.writeHead(404);
       response.end('Not found');
       return;
@@ -241,6 +288,12 @@ export class WebServer {
 
     response.writeHead(200, { 'Content-Type': getMimeType(filePath) });
     createReadStream(filePath).pipe(response);
+  }
+
+  private async handleDashboardDocument(response: ServerResponse): Promise<void> {
+    const html = renderDashboardHtml(await getDashboardTemplate(), this.dashboardSessionToken);
+    response.writeHead(200, DASHBOARD_HTML_HEADERS);
+    response.end(html);
   }
 
   private async handlePersonaUpdate(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -286,11 +339,15 @@ export class WebServer {
 
     sendJson(response, {
       stopped: true,
-      message: 'Daemon stop requested. Start it again with "sbotify start", or open a new coding session if auto-start is enabled.',
+      message: 'Daemon stop requested. Start it again with "agentune start", or open a new coding session if auto-start is enabled.',
     });
     setTimeout(() => {
       void Promise.resolve(this.onStopDaemon?.('dashboard stop'));
     }, 100);
+  }
+
+  private sendDashboardForbidden(response: ServerResponse): void {
+    sendJson(response, { message: DASHBOARD_SESSION_EXPIRED_MESSAGE }, 403);
   }
 
   private handleSocketMessage(rawMessage: string): void {
@@ -334,7 +391,7 @@ export class WebServer {
         }
         return;
       }
-      if (message.type === 'volume' && typeof message.level === 'number') {
+      if (message.type === 'volume' && typeof message.level === 'number' && Number.isFinite(message.level)) {
         this.mpv.setVolume(message.level);
       }
       if (message.type === 'mute') {
@@ -401,4 +458,11 @@ export function createWebServer(
 
 export function getWebServer(): WebServer | null {
   return webServer;
+}
+
+let dashboardTemplateCache: string | null = null;
+
+async function getDashboardTemplate(): Promise<string> {
+  dashboardTemplateCache ??= await readFile(fileURLToPath(new URL('../../public/index.html', import.meta.url)), 'utf8');
+  return dashboardTemplateCache;
 }

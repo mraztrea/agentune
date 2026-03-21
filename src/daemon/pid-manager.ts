@@ -1,17 +1,18 @@
-// PID file management for singleton daemon discovery.
-
 import { writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { getPidFilePath } from '../runtime/runtime-data-paths.js';
+// PID file management for singleton daemon discovery.
 
 export interface DaemonInfo {
+  controlToken: string;
   pid: number;
   port: number;
   started: string;
 }
 
 /** Write current PID + port + ISO timestamp to PID file */
-export function writePidFile(port: number): void {
+export function writePidFile(port: number, controlToken: string): void {
   const info: DaemonInfo = {
+    controlToken,
     pid: process.pid,
     port,
     started: new Date().toISOString(),

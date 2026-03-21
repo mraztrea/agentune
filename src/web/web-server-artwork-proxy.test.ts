@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http';
+import { createServer } from 'http';
 import test from 'node:test';
 import { QueueManager } from '../queue/queue-manager.js';
+import { isBlockedArtworkUrl } from './web-server-artwork-proxy.js';
+import { getDashboardAuth } from './web-server-test-helpers.js';
 import { createWebServer } from './web-server.js';
 
 class ArtworkFakeMpv extends EventEmitter {
@@ -38,7 +40,7 @@ async function getAvailablePort(): Promise<number> {
         return;
       }
       const { port } = address;
-      server.close((error) => {
+      server.close((error?: Error | null) => {
         if (error) {
           reject(error);
           return;
@@ -49,37 +51,35 @@ async function getAvailablePort(): Promise<number> {
   });
 }
 
-async function startUpstreamServer(
-  handler: (request: IncomingMessage, response: ServerResponse) => void,
-): Promise<{ port: number; server: Server }> {
-  const server = createServer(handler);
-  const port = await getAvailablePort();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolve());
-  });
-  return { port, server };
-}
-
 test('WebServer artwork proxy streams remote artwork with safe headers', async () => {
-  const upstream = await startUpstreamServer((request, response) => {
-    if (request.url === '/art.png') {
-      response.writeHead(200, { 'Content-Type': 'image/png' });
-      response.end('proxy-image');
-      return;
-    }
-    response.writeHead(404);
-    response.end();
-  });
-
   const webServer = createWebServer(new ArtworkFakeMpv() as never, new QueueManager(), {
     port: await getAvailablePort(),
   });
   await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const target = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+    if (target.startsWith(webServer.getDashboardUrl())) {
+      return await originalFetch(input, init);
+    }
+
+    return new Response('proxy-image', {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    });
+  };
 
   try {
-    const source = `http://127.0.0.1:${upstream.port}/art.png`;
-    const response = await fetch(`${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent(source)}`);
+    const source = 'https://example.com/art.png';
+    const response = await fetch(
+      `${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent(source)}&dashboardToken=${encodeURIComponent(auth.token)}`,
+    );
     const body = await response.text();
 
     assert.equal(response.status, 200);
@@ -87,7 +87,7 @@ test('WebServer artwork proxy streams remote artwork with safe headers', async (
     assert.equal(response.headers.get('cache-control'), 'public, max-age=300');
     assert.equal(body, 'proxy-image');
   } finally {
-    await new Promise<void>((resolve) => upstream.server.close(() => resolve()));
+    globalThis.fetch = originalFetch;
     await webServer.destroy();
   }
 });
@@ -97,9 +97,12 @@ test('WebServer artwork proxy rejects invalid URLs', async () => {
     port: await getAvailablePort(),
   });
   await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
 
   try {
-    const response = await fetch(`${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent('file:///etc/passwd')}`);
+    const response = await fetch(
+      `${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent('file:///etc/passwd')}&dashboardToken=${encodeURIComponent(auth.token)}`,
+    );
     const payload = await response.json() as { message: string };
 
     assert.equal(response.status, 400);
@@ -110,25 +113,190 @@ test('WebServer artwork proxy rejects invalid URLs', async () => {
 });
 
 test('WebServer artwork proxy reports upstream failures safely', async () => {
-  const upstream = await startUpstreamServer((_request, response) => {
-    response.writeHead(404);
-    response.end('missing');
+  const webServer = createWebServer(new ArtworkFakeMpv() as never, new QueueManager(), {
+    port: await getAvailablePort(),
   });
+  await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const target = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
 
+    if (target.startsWith(webServer.getDashboardUrl())) {
+      return await originalFetch(input, init);
+    }
+
+    return new Response('missing', {
+      status: 404,
+      headers: { 'Content-Type': 'image/png' },
+    });
+  };
+
+  try {
+    const source = 'https://example.com/missing.png';
+    const response = await fetch(
+      `${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent(source)}&dashboardToken=${encodeURIComponent(auth.token)}`,
+    );
+    const payload = await response.json() as { message: string };
+
+    assert.equal(response.status, 502);
+    assert.match(payload.message, /artwork fetch failed/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await webServer.destroy();
+  }
+});
+
+test('WebServer artwork proxy rejects local artwork hosts', async () => {
+  const webServer = createWebServer(new ArtworkFakeMpv() as never, new QueueManager(), {
+    port: await getAvailablePort(),
+  });
+  await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
+
+  try {
+    const response = await fetch(
+      `${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent('http://127.0.0.1:3737/art.png')}&dashboardToken=${encodeURIComponent(auth.token)}`,
+    );
+    const payload = await response.json() as { message: string };
+
+    assert.equal(response.status, 400);
+    assert.match(payload.message, /valid http or https url/i);
+  } finally {
+    await webServer.destroy();
+  }
+});
+
+test('WebServer artwork proxy rejects non-image content types and oversized responses', async () => {
+  const webServer = createWebServer(new ArtworkFakeMpv() as never, new QueueManager(), {
+    port: await getAvailablePort(),
+  });
+  await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = async (input, init) => {
+      const target = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+      if (target.startsWith(webServer.getDashboardUrl())) {
+        return await originalFetch(input, init);
+      }
+
+      return new Response('<html></html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    };
+
+    const nonImageResponse = await fetch(
+        `${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent('https://example.com/not-image')}&dashboardToken=${encodeURIComponent(auth.token)}`,
+    );
+    const nonImagePayload = await nonImageResponse.json() as { message: string };
+    assert.equal(nonImageResponse.status, 502);
+    assert.match(nonImagePayload.message, /image/i);
+
+    globalThis.fetch = async (input, init) => {
+      const target = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+      if (target.startsWith(webServer.getDashboardUrl())) {
+        return await originalFetch(input, init);
+      }
+
+      return new Response('x'.repeat(5 * 1024 * 1024 + 1), {
+        status: 200,
+        headers: { 'Content-Type': 'image/png' },
+      });
+    };
+
+    const oversizedResponse = await fetch(
+        `${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent('https://example.com/large.png')}&dashboardToken=${encodeURIComponent(auth.token)}`,
+    );
+    const oversizedPayload = await oversizedResponse.json() as { message: string };
+    assert.equal(oversizedResponse.status, 413);
+    assert.match(oversizedPayload.message, /artwork fetch failed/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await webServer.destroy();
+  }
+});
+
+test('WebServer artwork proxy rejects redirects to blocked local targets', async () => {
+  const webServer = createWebServer(new ArtworkFakeMpv() as never, new QueueManager(), {
+    port: await getAvailablePort(),
+  });
+  await webServer.waitUntilReady();
+  const auth = await getDashboardAuth(webServer);
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input, init) => {
+    const target = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+    if (target.startsWith(webServer.getDashboardUrl())) {
+      return await originalFetch(input, init);
+    }
+
+    return new Response(null, {
+      status: 302,
+      headers: { Location: 'http://127.0.0.1:3737/private-art.png' },
+    });
+  };
+
+  try {
+    const response = await fetch(
+      `${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent('https://example.com/redirect-art.png')}&dashboardToken=${encodeURIComponent(auth.token)}`,
+    );
+    const payload = await response.json() as { message: string };
+
+    assert.equal(response.status, 502);
+    assert.match(payload.message, /artwork fetch failed/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await webServer.destroy();
+  }
+});
+
+test('WebServer artwork proxy rejects missing dashboard token', async () => {
   const webServer = createWebServer(new ArtworkFakeMpv() as never, new QueueManager(), {
     port: await getAvailablePort(),
   });
   await webServer.waitUntilReady();
 
   try {
-    const source = `http://127.0.0.1:${upstream.port}/missing.png`;
-    const response = await fetch(`${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent(source)}`);
-    const payload = await response.json() as { message: string };
-
-    assert.equal(response.status, 502);
-    assert.match(payload.message, /artwork fetch failed/i);
+    const response = await fetch(`${webServer.getDashboardUrl()}/api/artwork?src=${encodeURIComponent('https://images.example.com/art.png')}`);
+    assert.equal(response.status, 403);
   } finally {
-    await new Promise<void>((resolve) => upstream.server.close(() => resolve()));
     await webServer.destroy();
   }
+});
+
+test('isBlockedArtworkUrl rejects private DNS resolutions', async () => {
+  const lookup = async (hostname: string) => {
+    if (hostname === 'safe.example') {
+      return [{ address: '203.0.113.10', family: 4 }];
+    }
+    if (hostname === 'private.example') {
+      return [{ address: '127.0.0.1', family: 4 }];
+    }
+    throw new Error('unexpected lookup');
+  };
+
+  assert.equal(await isBlockedArtworkUrl(new URL('https://safe.example/art.png'), { fetch, lookup }), false);
+  assert.equal(await isBlockedArtworkUrl(new URL('https://private.example/art.png'), { fetch, lookup }), true);
 });

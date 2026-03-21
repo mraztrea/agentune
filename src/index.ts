@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// sbotify — MCP music server entry point
+// agentune — MCP music server entry point
 // Bootstraps MCP server, audio engine, and web dashboard
 
 import { createMpvController, getMpvController, waitForMpvStartupWarmup } from './audio/mpv-controller.js';
@@ -11,6 +11,7 @@ import { createQueuePlaybackController, getQueuePlaybackController } from './que
 import { createHistoryStore, getHistoryStore } from './history/history-store.js';
 import { createAppleSearchProvider } from './providers/apple-search-provider.js';
 import { createTasteEngine } from './taste/taste-engine.js';
+import { createDaemonControlToken } from './daemon/daemon-auth.js';
 import { DaemonServer } from './daemon/daemon-server.js';
 import { writePidFile, removePidFile } from './daemon/pid-manager.js';
 import { loadRuntimeConfig } from './runtime/runtime-config.js';
@@ -25,13 +26,13 @@ async function bootstrapComponents(webServerOptions?: Pick<WebServerOptions, 'on
   try {
     createHistoryStore();
   } catch (err) {
-    console.error('[sbotify] History DB unavailable:', (err as Error).message);
+    console.error('[agentune] History DB unavailable:', (err as Error).message);
   }
 
   const store = getHistoryStore();
   if (store) {
     createTasteEngine(store);
-    console.error('[sbotify] Taste engine initialized.');
+    console.error('[agentune] Taste engine initialized.');
   }
 
   const queueManager = createQueueManager();
@@ -40,7 +41,7 @@ async function bootstrapComponents(webServerOptions?: Pick<WebServerOptions, 'on
   if (store) {
     const db = store.getDatabase();
     createAppleSearchProvider(db);
-    console.error('[sbotify] Discovery provider initialized (Apple).');
+    console.error('[agentune] Discovery provider initialized (Apple).');
   }
 
   const mpv = createMpvController(runtimeConfig.defaultVolume);
@@ -57,8 +58,8 @@ async function bootstrapComponents(webServerOptions?: Pick<WebServerOptions, 'on
     // can miss the stop signal and queued tracks will not auto-advance.
     await waitForMpvStartupWarmup();
   } catch (err) {
-    console.error('[sbotify] Audio engine unavailable:', (err as Error).message);
-    console.error('[sbotify] MCP tools will return errors until mpv is installed.');
+    console.error('[agentune] Audio engine unavailable:', (err as Error).message);
+    console.error('[agentune] MCP tools will return errors until mpv is installed.');
   }
 
   return { mpv };
@@ -67,31 +68,61 @@ async function bootstrapComponents(webServerOptions?: Pick<WebServerOptions, 'on
 // --- Daemon mode ---
 
 async function startDaemon() {
-  console.error('[sbotify] Starting in daemon mode...');
+  console.error('[agentune] Starting in daemon mode...');
   const runtimeConfig = loadRuntimeConfig();
-  const daemonServer = new DaemonServer(runtimeConfig.daemonPort);
+  const daemonControlToken = createDaemonControlToken();
+  const daemonServer = new DaemonServer(runtimeConfig.daemonPort, daemonControlToken);
+  let shutdownPromise: Promise<void> | null = null;
 
   async function daemonShutdown(reason: string) {
-    console.error(`[sbotify] Daemon shutting down (${reason})...`);
-    getQueuePlaybackController()?.clearForShutdown();
-    getHistoryStore()?.close();
-    await getWebServer()?.destroy();
-    removePidFile();
-    await daemonServer.destroy();
-    getMpvController()?.destroy();
-    process.exit(0);
+    if (shutdownPromise) {
+      return await shutdownPromise;
+    }
+
+    shutdownPromise = (async () => {
+      console.error(`[agentune] Daemon shutting down (${reason})...`);
+      getQueuePlaybackController()?.clearForShutdown();
+
+      await runShutdownStep('daemon server destroy', async () => {
+        await daemonServer.destroy();
+      });
+      await runShutdownStep('web server destroy', async () => {
+        await getWebServer()?.destroy();
+      });
+      await runShutdownStep('history store close', async () => {
+        getHistoryStore()?.close();
+      });
+      await runShutdownStep('mpv destroy', async () => {
+        getMpvController()?.destroy();
+      });
+      await runShutdownStep('pid file removal', async () => {
+        removePidFile();
+      });
+
+      process.exit(0);
+    })();
+
+    return await shutdownPromise;
   }
 
   await bootstrapComponents({ onStopDaemon: daemonShutdown });
   daemonServer.setShutdownHandler(daemonShutdown);
 
   const port = await daemonServer.start();
-  writePidFile(port);
+  writePidFile(port, daemonControlToken);
 
-  console.error(`[sbotify] Daemon ready on http://127.0.0.1:${port}`);
+  console.error(`[agentune] Daemon ready on http://127.0.0.1:${port}`);
 
   process.on('SIGINT', () => void daemonShutdown('SIGINT'));
   process.on('SIGTERM', () => void daemonShutdown('SIGTERM'));
+}
+
+async function runShutdownStep(step: string, action: () => Promise<void> | void): Promise<void> {
+  try {
+    await action();
+  } catch (err) {
+    console.error(`[agentune] Shutdown step failed (${step}):`, (err as Error).message);
+  }
 }
 
 // --- Entry point ---
@@ -99,7 +130,7 @@ async function startDaemon() {
 const args = process.argv.slice(2);
 
 if (args.includes('--daemon')) {
-  startDaemon().catch((err) => { console.error('[sbotify] Fatal:', err); process.exit(1); });
+  startDaemon().catch((err) => { console.error('[agentune] Fatal:', err); process.exit(1); });
 } else if (args[0] === 'status') {
   import('./cli/status-command.js').then(({ runStatus }) => runStatus());
 } else if (args[0] === 'start') {
@@ -108,7 +139,7 @@ if (args.includes('--daemon')) {
   import('./cli/stop-command.js').then(({ runStop }) => runStop());
 } else {
   // Default: proxy mode — relay stdio↔HTTP and optionally auto-start daemon.
-  startProxyMode().catch((err) => { console.error('[sbotify] Fatal:', err); process.exit(1); });
+  startProxyMode().catch((err) => { console.error('[agentune] Fatal:', err); process.exit(1); });
 }
 
 async function startProxyMode() {
@@ -116,7 +147,7 @@ async function startProxyMode() {
   const { startProxy } = await import('./proxy/stdio-proxy.js');
   const runtimeConfig = loadRuntimeConfig();
 
-  const { port } = await ensureDaemon({ allowSpawn: runtimeConfig.autoStartDaemon });
-  console.error(`[sbotify] Connected to daemon on port ${port}`);
-  await startProxy(port);
+  const { controlToken, port } = await ensureDaemon({ allowSpawn: runtimeConfig.autoStartDaemon });
+  console.error(`[agentune] Connected to daemon on port ${port}`);
+  await startProxy(port, controlToken);
 }

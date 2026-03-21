@@ -1,6 +1,13 @@
 import { DATABASE_ACTION_LABELS, STOP_DAEMON_LABEL } from './dashboard/constants.js';
 import { elements } from './dashboard/dom.js';
 import {
+  buildDashboardWebSocketUrl,
+  DASHBOARD_SESSION_EXPIRED_MESSAGE,
+  dashboardFetch,
+  isDashboardSessionExpiredError,
+} from './dashboard/auth.js';
+import {
+  applySessionExpiredState,
   applyStoppedState,
   renderDatabaseStats,
   renderPersona,
@@ -22,6 +29,7 @@ import { syncTasteTextareaHeight } from './dashboard/taste-textarea.js';
 let armedDangerAction = null;
 let dangerArmTimer = null;
 let daemonStoppedByUser = false;
+let dashboardSessionExpired = false;
 let socket;
 let activeView = 'player';
 let lastInsightTrackKey = '';
@@ -32,7 +40,16 @@ function syncVolumeSliderFill(level) {
 }
 
 function connect() {
-  socket = new WebSocket(`ws://${window.location.host}/ws`);
+  if (dashboardSessionExpired) {
+    return;
+  }
+
+  try {
+    socket = new WebSocket(buildDashboardWebSocketUrl('/ws'));
+  } catch {
+    handleDashboardSessionExpiry();
+    return;
+  }
 
   socket.addEventListener('message', (event) => {
     const payload = JSON.parse(event.data);
@@ -46,8 +63,13 @@ function connect() {
     }
   });
 
-  socket.addEventListener('close', () => {
-    if (!daemonStoppedByUser) {
+  socket.addEventListener('close', (event) => {
+    if (event.code === 4403) {
+      handleDashboardSessionExpiry();
+      return;
+    }
+
+    if (!daemonStoppedByUser && !dashboardSessionExpired) {
       window.setTimeout(connect, 1000);
     }
   });
@@ -120,6 +142,10 @@ async function loadDatabaseStats(options = {}) {
       showDatabaseMessage('');
     }
   } catch (error) {
+    if (isDashboardSessionExpiredError(error)) {
+      handleDashboardSessionExpiry();
+      return;
+    }
     showDatabaseMessage(error.message ?? 'Failed to load database stats.', true);
   }
 }
@@ -132,10 +158,16 @@ async function runDatabaseAction(actionId, button) {
     showDatabaseMessage(data.message ?? 'Cleanup complete.');
     clearDangerArming();
   } catch (error) {
+    if (isDashboardSessionExpiredError(error)) {
+      handleDashboardSessionExpiry();
+      return;
+    }
     showDatabaseMessage(error.message ?? 'Database cleanup failed.', true);
   } finally {
-    button.disabled = false;
-    await loadDatabaseStats({ preserveMessage: true });
+    if (!dashboardSessionExpired) {
+      button.disabled = false;
+      await loadDatabaseStats({ preserveMessage: true });
+    }
   }
 }
 
@@ -148,6 +180,10 @@ async function runDaemonStop(button) {
     socket?.close();
     applyStoppedState(data.message ?? 'Daemon stop requested.');
   } catch (error) {
+    if (isDashboardSessionExpiredError(error)) {
+      handleDashboardSessionExpiry();
+      return;
+    }
     clearDangerArming();
     button.disabled = false;
     showDatabaseMessage(error.message ?? 'Daemon stop failed.', true);
@@ -162,6 +198,16 @@ function maybeRefreshInsightsForState(state) {
   if (activeView === 'settings' && trackChanged) {
     void loadDatabaseStats();
   }
+}
+
+function handleDashboardSessionExpiry() {
+  if (dashboardSessionExpired) {
+    return;
+  }
+
+  dashboardSessionExpired = true;
+  clearDangerArming();
+  applySessionExpiredState(DASHBOARD_SESSION_EXPIRED_MESSAGE);
 }
 
 elements.navButtons.forEach((button) => {
@@ -203,6 +249,10 @@ elements.saveTaste.addEventListener('click', async () => {
     showPersonaMessage('Persona saved.');
     renderPersona(data);
   } catch (error) {
+    if (isDashboardSessionExpiredError(error)) {
+      handleDashboardSessionExpiry();
+      return;
+    }
     showPersonaMessage(error.message ?? 'Persona save failed.', true);
   }
 });
@@ -231,7 +281,7 @@ elements.stopDaemon.addEventListener('click', async () => {
   await runDaemonStop(elements.stopDaemon);
 });
 
-fetch('/api/status')
+dashboardFetch('/api/status')
   .then((response) => response.json())
   .then((state) => {
     if (!allowStatusBootstrap) {
@@ -241,14 +291,22 @@ fetch('/api/status')
     renderState(state);
     maybeRefreshInsightsForState(state);
   })
-  .catch(() => {
+  .catch((error) => {
+    if (isDashboardSessionExpiredError(error)) {
+      handleDashboardSessionExpiry();
+      return;
+    }
     showDatabaseMessage('Waiting for server state.');
   });
 
-fetch('/api/persona')
+dashboardFetch('/api/persona')
   .then((response) => response.json())
   .then((data) => renderPersona(data))
-  .catch(() => {});
+  .catch((error) => {
+    if (isDashboardSessionExpiredError(error)) {
+      handleDashboardSessionExpiry();
+    }
+  });
 
 syncVolumeSliderFill(Number(elements.volume.value));
 syncTasteTextareaHeight(elements.taste);

@@ -2,7 +2,8 @@
 
 import { spawn } from 'child_process';
 import { closeSync, openSync } from 'fs';
-import { readPidFile, isDaemonRunning } from '../daemon/pid-manager.js';
+import { fileURLToPath } from 'url';
+import { type DaemonInfo, readPidFile, isDaemonRunning } from '../daemon/pid-manager.js';
 import { loadRuntimeConfig } from '../runtime/runtime-config.js';
 import { getDaemonLogPath } from '../runtime/runtime-data-paths.js';
 
@@ -14,6 +15,7 @@ export interface EnsureDaemonOptions {
 }
 
 export interface EnsureDaemonResult {
+  controlToken: string;
   port: number;
   started: boolean;
 }
@@ -41,11 +43,15 @@ export async function ensureDaemon(
   const check = dependencies.isDaemonRunning();
   if (check.running && check.info) {
     const healthy = await dependencies.checkHealth(check.info.port);
-    if (healthy) return { port: check.info.port, started: false };
+    if (healthy) return {
+      controlToken: check.info.controlToken,
+      port: check.info.port,
+      started: false,
+    };
   }
 
   if (!allowSpawn) {
-    throw new Error('Daemon is not running. Start it with "sbotify start".');
+    throw new Error('Daemon is not running. Start it with "agentune start".');
   }
 
   dependencies.spawnDaemon();
@@ -53,7 +59,7 @@ export async function ensureDaemon(
 }
 
 function spawnDetachedDaemon(): void {
-  const entryPoint = process.argv[1]; // dist/index.js
+  const entryPoint = resolveDaemonEntryPoint();
   const logPath = getDaemonLogPath();
   const logFd = openSync(logPath, 'w');
 
@@ -68,6 +74,10 @@ function spawnDetachedDaemon(): void {
   closeSync(logFd);
 }
 
+export function resolveDaemonEntryPoint(): string {
+  return fileURLToPath(new URL('../index.js', import.meta.url));
+}
+
 async function waitForHealth(
   expectedPort: number,
   dependencies: DaemonLauncherDependencies,
@@ -76,7 +86,13 @@ async function waitForHealth(
   while (dependencies.now() < deadline) {
     const info = dependencies.readPidFile();
     const port = info?.port ?? expectedPort;
-    if (await dependencies.checkHealth(port)) return { port, started: true };
+    if (info?.controlToken && await dependencies.checkHealth(port)) {
+      return {
+        controlToken: info.controlToken,
+        port,
+        started: true,
+      };
+    }
     await dependencies.sleep(HEALTH_POLL_INTERVAL);
   }
   throw new Error(`Daemon failed to start within 10s. Check ${dependencies.getDaemonLogPath()}`);

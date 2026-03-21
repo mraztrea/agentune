@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">agentune waveform logo</title>
+  <desc id="desc">A blue audio waveform with a centered dot above its tallest peak on a transparent background.</desc>
+  <circle cx="325" cy="110" r="12" fill="#1f5da8"/>
+  <path
+    d="M54 256
+      C70 256 78 268 94 268
+      C110 268 118 232 136 232
+      C152 232 160 298 180 298
+      C200 298 206 184 228 184
+      C248 184 254 330 276 330
+      C298 330 304 152 326 152
+      C348 152 354 350 378 350
+      C400 350 406 184 428 184
+      C448 184 456 268 474 268
+      C488 268 496 256 504 256"
+    fill="none"
+    stroke="#1f5da8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="9"
+  />
+</svg>

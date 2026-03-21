@@ -1,5 +1,7 @@
+import { dashboardFetch } from './auth.js';
+
 export async function fetchDatabaseStats() {
-  const response = await fetch('/api/database/stats');
+  const response = await dashboardFetch('/api/database/stats');
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.message ?? 'Failed to load database stats.');
@@ -8,7 +10,7 @@ export async function fetchDatabaseStats() {
 }
 
 export async function postDatabaseAction(actionId) {
-  const response = await fetch(`/api/database/${actionId}`, { method: 'POST' });
+  const response = await dashboardFetch(`/api/database/${actionId}`, { method: 'POST' });
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.message ?? 'Database cleanup failed.');
@@ -17,7 +19,7 @@ export async function postDatabaseAction(actionId) {
 }
 
 export async function savePersonaTaste(taste) {
-  const response = await fetch('/api/persona', {
+  const response = await dashboardFetch('/api/persona', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ taste }),
@@ -30,7 +32,7 @@ export async function savePersonaTaste(taste) {
 }
 
 export async function requestDaemonStop() {
-  const response = await fetch('/api/daemon/stop', { method: 'POST' });
+  const response = await dashboardFetch('/api/daemon/stop', { method: 'POST' });
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.message ?? 'Daemon stop failed.');

@@ -1,20 +1,17 @@
 import { exec } from 'child_process';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { extname, join } from 'path';
+import { extname } from 'path';
+
+const MAX_JSON_BODY_SIZE = 1024 * 1024;
 
 const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
   '.js': 'application/javascript; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml; charset=utf-8',
 };
-
-export function getStaticFilePath(publicDir: string, pathname: string): string {
-  if (pathname === '/' || pathname === '') {
-    return join(publicDir, 'index.html');
-  }
-
-  return join(publicDir, pathname.replace(/^\/+/, ''));
-}
 
 export function getMimeType(filePath: string): string {
   return MIME_TYPES[extname(filePath)] ?? 'application/octet-stream';
@@ -41,11 +38,7 @@ export function openUrl(url: string): void {
 
 export async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown> | null> {
   try {
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const parsed = JSON.parse((await readRequestBody(request)).toString('utf8'));
     if (typeof parsed !== 'object' || parsed === null) return null;
     return parsed as Record<string, unknown>;
   } catch {
@@ -55,18 +48,33 @@ export async function readJsonBody(request: IncomingMessage): Promise<Record<str
 
 export async function readVolumeRequest(request: IncomingMessage): Promise<{ volume: number } | null> {
   try {
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-
-    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { volume?: number };
-    if (typeof parsed.volume !== 'number') {
+    const parsed = JSON.parse((await readRequestBody(request)).toString('utf8')) as { volume?: number };
+    if (typeof parsed.volume !== 'number' || !Number.isFinite(parsed.volume)) {
       return null;
     }
 
-    return { volume: parsed.volume };
+    return { volume: clampVolume(parsed.volume) };
   } catch {
     return null;
   }
+}
+
+async function readRequestBody(request: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let totalSize = 0;
+
+  for await (const chunk of request) {
+    const nextChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalSize += nextChunk.length;
+    if (totalSize > MAX_JSON_BODY_SIZE) {
+      throw new Error('Request body too large.');
+    }
+    chunks.push(nextChunk);
+  }
+
+  return Buffer.concat(chunks);
+}
+
+function clampVolume(level: number): number {
+  return Math.max(0, Math.min(100, Math.round(level)));
 }
