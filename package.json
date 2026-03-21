@@ -40,11 +40,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tqdat410/sbotify-mcp.git"
+    "url": "git+https://github.com/tqdat410/agentune.git"
   },
-  "homepage": "https://github.com/tqdat410/sbotify-mcp#readme",
+  "homepage": "https://github.com/tqdat410/agentune#readme",
   "bugs": {
-    "url": "https://github.com/tqdat410/sbotify-mcp/issues"
+    "url": "https://github.com/tqdat410/agentune/issues"
   },
   "publishConfig": {
     "access": "public"

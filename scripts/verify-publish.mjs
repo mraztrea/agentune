@@ -6,9 +6,9 @@ import { NPM, ROOT_DIR, ensure, parseJsonOutput, readPackageJson, removeDir, run
 
 const PACKAGE_NAME = 'agentune';
 const BIN_PATH = 'dist/index.js';
-const REPOSITORY_URL = 'git+https://github.com/tqdat410/sbotify-mcp.git';
-const HOMEPAGE_URL = 'https://github.com/tqdat410/sbotify-mcp#readme';
-const BUGS_URL = 'https://github.com/tqdat410/sbotify-mcp/issues';
+const REPOSITORY_URL = 'git+https://github.com/tqdat410/agentune.git';
+const HOMEPAGE_URL = 'https://github.com/tqdat410/agentune#readme';
+const BUGS_URL = 'https://github.com/tqdat410/agentune/issues';
 const ALLOWED_ROOT_FILES = new Set(['README.md', 'LICENSE', 'package.json']);
 
 function validateMetadata(pkg) {
