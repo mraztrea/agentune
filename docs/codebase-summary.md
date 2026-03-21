@@ -2,14 +2,17 @@
 
 ## Current Implementation
 
-`sbotify` is a shared local daemon for agent-controlled music playback.
+`agentune` is a shared local daemon for agent-controlled music playback.
 
 - Agents talk to the daemon through MCP.
 - The daemon owns queue state, playback, listening history, and the browser dashboard.
 - `mpv` handles audio output.
 - SQLite stores tracks, play events, provider cache data, and persisted persona taste text.
-- Runtime ports, default volume, auto-start policy, and fixed discover ranking live in `${SBOTIFY_DATA_DIR || ~/.sbotify}/config.json`.
+- Runtime ports, default volume, auto-start policy, and fixed discover ranking live in `${AGENTUNE_DATA_DIR || ~/.agentune}/config.json`.
 - The daemon is explicit-lifecycle: no idle auto-shutdown, stop only via CLI or dashboard.
+- `agentune stop` now waits for graceful shutdown first and only falls back to a verified process kill.
+- The daemon PID file now also carries a per-process control token used by `/mcp` and `/shutdown`.
+- The dashboard now bootstraps a per-process session token into HTML and requires that token for local API, artwork-proxy, and WebSocket access.
 
 The active state redesign is agent-first:
 
@@ -29,7 +32,7 @@ The active state redesign is agent-first:
 ## Project Structure
 
 ```text
-sbotify/
+agentune/
 ├── src/
 │   ├── index.ts
 │   ├── audio/
@@ -41,6 +44,7 @@ sbotify/
 │   │   ├── status-command.ts
 │   │   └── stop-command.ts
 │   ├── daemon/
+│   │   ├── daemon-auth.ts
 │   │   ├── daemon-server.ts
 │   │   ├── health-endpoint.ts
 │   │   └── pid-manager.ts
@@ -82,15 +86,21 @@ sbotify/
 │   │   └── runtime-data-paths.ts
 │   └── web/
 │       ├── state-broadcaster.ts
+│       ├── web-server-auth.ts
 │       ├── web-server-artwork-proxy.test.ts
 │       ├── web-server-artwork-proxy.ts
 │       ├── web-server-database-cleanup.test.ts
 │       ├── web-server-database-cleanup.ts
 │       ├── web-server-helpers.ts
+│       ├── web-server-static-file-path.ts
+│       ├── web-server-test-helpers.ts
 │       └── web-server.ts
 ├── public/
 │   ├── app.js
+│   ├── assets/
+│   │   └── agentune-mark.svg
 │   ├── dashboard/
+│   │   ├── auth.js
 │   │   ├── constants.js
 │   │   ├── dom.js
 │   │   ├── insights.js
@@ -98,6 +108,7 @@ sbotify/
 │   │   ├── render.js
 │   │   ├── settings-api.js
 │   │   └── theme.js
+│   ├── favicon.ico
 │   ├── index.html
 │   ├── style.css
 │   └── styles/
@@ -243,8 +254,11 @@ Important details:
 Files:
 
 - `src/web/web-server.ts`
+- `src/web/web-server-auth.ts`
 - `src/web/state-broadcaster.ts`
 - `src/web/web-server-helpers.ts`
+- `src/web/web-server-static-file-path.ts`
+- `public/dashboard/auth.js`
 - `public/index.html`
 - `public/app.js`
 - `public/style.css`
@@ -266,9 +280,11 @@ Current HTTP and WebSocket surface:
 Current behavior:
 
 - `StateBroadcaster` publishes playback snapshots: playing, title, artist, thumbnail, position, duration, volume, muted, queue.
+- `GET /` serves dashboard HTML dynamically and injects a session token into a `<meta>` tag.
 - Persona data is fetched separately from `/api/persona`.
 - Artwork is fetched through `/api/artwork`, so the browser can render and sample thumbnails from a same-origin URL.
 - If `/api/artwork` fails, the dashboard image element falls back to the raw remote thumbnail URL so album art still renders on older daemons or proxy failures.
+- When no track artwork exists yet, the dashboard falls back to the local `public/assets/agentune-mark.svg` logo instead of a remote placeholder service.
 - Persona changes are broadcast separately over WebSocket as `{ type: "persona", data: { taste } }`.
 - The dashboard includes:
   - centered player shell with full-screen `Queue / Now Playing / Settings` tabs
@@ -286,11 +302,21 @@ Important details:
 - Runtime config file now stores exact `dashboardPort`, `daemonPort`, `defaultVolume`, and fixed `discoverRanking` weights.
 - Runtime config also stores `autoStartDaemon`, which controls whether proxy sessions may auto-spawn the daemon.
 - The daemon is not tied to the proxy terminal anymore; explicit stop only.
+- `GET` / `POST` `/api/*` require `X-Agentune-Dashboard-Token`.
+- `GET /api/artwork` and `WS /ws` require `dashboardToken`, and mutating browser requests must come from the same dashboard origin.
+- `/api/artwork` now resolves DNS before fetch, validates redirects, and rejects blocked private/loopback/link-local targets.
+- Static assets are resolved against the real `public/` root instead of relying on prefix string checks.
+- The dashboard ships a local SVG logo plus `favicon.ico`; no external placeholder artwork request is needed for the empty state anymore.
 - The old dashboard context badge is gone.
 - `POST /api/persona` accepts only `taste`.
+- Dashboard JSON body reads are bounded instead of buffering untrusted request bodies without a size cap.
+- `POST /api/volume` rejects non-finite values and clamps accepted input into `0..100`.
+- WebSocket volume updates also reject non-finite values.
 - `GET /api/database/stats` now returns raw counts plus a smaller `insights` block sourced from SQLite aggregates: `plays7d`, `tracks7d`, `skipRate`, `activity7d`, top 3 artists, and enough top tags to fill the 2-row dashboard block.
 - `public/app.js` loads initial playback and persona state with HTTP, listens for live `state` and `persona` messages, and refetches dashboard stats when the Settings view needs a fresher snapshot.
+- `/api/artwork` only proxies remote `http` / `https` image responses, blocks loopback/private/link-local hosts, and caps proxied artwork size.
 - Database cleanup actions stop playback, clear runtime queue state, then mutate SQLite.
+- Destructive cleanup actions are serialized so overlapping dashboard requests cannot race each other.
 
 ## Tests and Validation
 

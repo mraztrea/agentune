@@ -1,5 +1,107 @@
 # Project Changelog
 
+## 2026-03-21 (Default Artwork Flicker Fix)
+
+### Root Cause + Fix
+- Fixed the empty-state dashboard artwork jitter in:
+  - `src/web/web-server-helpers.ts`
+  - `public/dashboard/render.js`
+  - `src/web/web-server-playback-controls.test.ts`
+- Root cause:
+  - local `.svg` assets were being served as `application/octet-stream` instead of `image/svg+xml`
+  - the artwork fallback guard compared an absolute browser URL with a relative placeholder path, which could reassign the same fallback source repeatedly on image errors
+- The dashboard now serves local SVG artwork with the correct MIME type and avoids placeholder reassign loops.
+
+## 2026-03-21 (Dashboard Favicon + Local Default Artwork)
+
+### Asset Update
+- Added a reusable local logo asset in:
+  - `public/assets/agentune-mark.svg`
+- Replaced the initial local placeholder mark with a lighter SVG waveform logo based on the provided dashboard brand image.
+- Removed the SVG background fill so the default artwork now renders with transparency.
+- Updated the browser favicon in:
+  - `public/favicon.ico`
+- The dashboard favicon now uses the provided `ChatGPT Image Mar 21, 2026, 08_30_12 PM.ico` asset.
+- Replaced the remote `placehold.co` fallback image in:
+  - `public/index.html`
+  - `public/dashboard/constants.js`
+- The dashboard now uses the local logo asset as its default artwork, which removes an unnecessary external request and shrinks the placeholder payload substantially.
+- `index.html` now points favicon loading directly at `/favicon.ico`.
+
+## 2026-03-21 (Local Web Hardening + Safer Daemon Stop)
+
+### Web Hardening
+- Hardened dashboard request handling in:
+  - `src/web/web-server-helpers.ts`
+  - `src/web/web-server-auth.ts`
+  - `src/web/web-server-static-file-path.ts`
+  - `src/web/web-server.ts`
+  - `src/web/web-server-artwork-proxy.ts`
+  - `src/web/web-server-database-cleanup.ts`
+  - `public/dashboard/auth.js`
+  - `public/dashboard/settings-api.js`
+  - `public/dashboard/theme.js`
+  - `public/dashboard/render.js`
+  - `public/app.js`
+- `GET /` now serves dashboard HTML with a per-process session token injected into a `<meta>` tag.
+- Dashboard routes now require local session auth:
+  - `GET` / `POST` `/api/*` require `X-Agentune-Dashboard-Token`
+  - `GET /api/artwork` and `WS /ws` require `dashboardToken`
+  - mutating `POST` routes and `WS /ws` also require same-origin browser requests
+- Old dashboard tabs now fail closed after daemon restart and render a refresh-required state instead of reconnecting forever.
+- Added bounded request-body reads for dashboard JSON posts.
+- Tightened `/api/volume` validation:
+  - rejects non-finite input
+  - clamps accepted values into `0..100`
+  - applies the same finite-number guard to WebSocket volume messages
+- Tightened `/api/artwork`:
+  - still only accepts `http` / `https`
+  - now rejects loopback, private-network, and link-local targets
+  - now resolves hostnames and rejects DNS results that land on blocked IP ranges
+  - now validates redirect targets instead of following them blindly
+  - now requires upstream `image/*` content
+  - now caps proxied artwork size instead of buffering unbounded responses
+- Replaced static file prefix checks with resolved-path validation so Windows `public` / `publicity` prefix collisions cannot escape the real `public/` root.
+- Serialized destructive dashboard database actions so concurrent cleanup clicks cannot overlap server-side reset work.
+
+### Daemon Lifecycle Hardening
+- Hardened daemon entrypoint resolution in:
+  - `src/proxy/daemon-launcher.ts`
+- The detached launcher now resolves the compiled daemon entrypoint from module location instead of relying on `process.argv[1]`, which is safer for global install and shimmed invocation paths.
+- Added daemon control-token auth in:
+  - `src/daemon/daemon-auth.ts`
+  - `src/daemon/daemon-server.ts`
+  - `src/daemon/pid-manager.ts`
+  - `src/proxy/stdio-proxy.ts`
+  - `src/cli/stop-command.ts`
+  - `src/index.ts`
+- The PID file now stores a daemon control token.
+- `/mcp` and `/shutdown` now require `X-Agentune-Daemon-Token`; `/health` stays unauthenticated for readiness checks.
+- Hardened `agentune stop` in:
+  - `src/cli/stop-command.ts`
+- Stop now:
+  - waits for graceful daemon shutdown after `/shutdown`
+  - only falls back to process kill after verifying the target still looks like an `agentune` daemon
+  - refuses blind PID kills when identity cannot be verified
+- Hardened daemon shutdown cleanup in:
+  - `src/index.ts`
+- Shutdown is now idempotent and best-effort across queue cleanup, HTTP servers, SQLite close, mpv teardown, and PID-file removal.
+
+### Regression Coverage
+- Added daemon stop coverage in:
+  - `src/cli/stop-command.test.ts`
+  - `src/daemon/daemon-server.test.ts`
+- Expanded dashboard hardening coverage in:
+  - `src/web/web-server-artwork-proxy.test.ts`
+  - `src/web/web-server-database-cleanup.test.ts`
+  - `src/web/web-server-playback-controls.test.ts`
+  - `src/web/web-server-persona-sync.test.ts`
+  - `src/web/web-server-test-helpers.ts`
+  - `src/proxy/daemon-launcher.test.ts`
+
+### Validation
+- `npm test`: 126 passed, 0 failed
+
 ## 2026-03-21 (Ambient Background Theme Transition Smoothing)
 
 ### Dashboard Background Motion
@@ -317,14 +419,14 @@
 ## 2026-03-20 (Optional Auto-Start + Manual Start Command)
 
 ### Daemon Startup Control
-- Extended `${SBOTIFY_DATA_DIR || ~/.sbotify}/config.json` with `autoStartDaemon`
+- Extended `${AGENTUNE_DATA_DIR || ~/.agentune}/config.json` with `autoStartDaemon`
 - Default remains `true`, so existing users keep the same proxy auto-start behavior
 - Runtime config loading now validates `autoStartDaemon` as a boolean
 - Runtime config loading now writes normalized defaults back to disk when older config files are missing new fields
 
 ### CLI + Proxy Behavior
-- Added `src/cli/start-command.ts` for `sbotify start`
-- `sbotify start` now ensures the daemon is running in the background and exits after readiness succeeds
+- Added `src/cli/start-command.ts` for `agentune start`
+- `agentune start` now ensures the daemon is running in the background and exits after readiness succeeds
 - Updated `src/index.ts` so proxy mode reads `autoStartDaemon` before deciding whether it may spawn the daemon
 - Updated `src/proxy/daemon-launcher.ts` so launcher flows now support:
   - connect to a healthy running daemon without spawning
@@ -332,7 +434,7 @@
   - report whether the daemon was newly started or already running
 
 ### Dashboard Copy + Tests + Docs
-- Updated dashboard stop messaging to point users to `sbotify start` while still mentioning new-session auto-start when enabled
+- Updated dashboard stop messaging to point users to `agentune start` while still mentioning new-session auto-start when enabled
 - Added launcher coverage in `src/proxy/daemon-launcher.test.ts`
 - Updated runtime config tests to cover `autoStartDaemon` defaults, validation, and config write-back
 - Synced README, system architecture, codebase summary, roadmap, and changelog to the optional auto-start flow
@@ -348,7 +450,7 @@
 - Windows `mpv` startup now prefers `mpv.exe` over the console wrapper when available
 - `node-mpv` is now loaded through a Windows-specific spawn patch so its child `mpv` process starts with `windowsHide: true`
 - Added `--terminal=no` to the managed `mpv` args to suppress terminal output noise
-- Result: the blank Windows console window should no longer appear when a coding session auto-starts `sbotify`
+- Result: the blank Windows console window should no longer appear when a coding session auto-starts `agentune`
 
 ### Tests
 - Added coverage for the Windows launch helpers in `src/audio/node-mpv-bootstrap.test.ts`
@@ -359,7 +461,7 @@
 - Removed daemon idle auto-shutdown from `src/daemon/daemon-server.ts`
 - Proxy-spawned daemon now detaches on Windows too in `src/proxy/daemon-launcher.ts`, so playback survives terminal closure
 - Daemon now stops only through explicit shutdown paths:
-  - `sbotify stop`
+  - `agentune stop`
   - daemon `/shutdown`
   - dashboard `Stop daemon`
 
@@ -370,7 +472,7 @@
   - `public/index.html`
   - `public/app.js`
   - `public/style.css`
-- After a dashboard stop, the page shows a stopped state, disables controls, and stops reconnecting until sbotify is started again
+- After a dashboard stop, the page shows a stopped state, disables controls, and stops reconnecting until agentune is started again
 
 ### Tests + Docs
 - Added web coverage for the explicit daemon stop route in `src/web/web-server-database-cleanup.test.ts`
@@ -419,7 +521,7 @@
 - Removed MCP tool `set_persona_traits` and updated dashboard `/api/persona` to accept only `taste`
 
 ### Runtime Config Expansion
-- Extended `${SBOTIFY_DATA_DIR || ~/.sbotify}/config.json` with:
+- Extended `${AGENTUNE_DATA_DIR || ~/.agentune}/config.json` with:
   - `defaultVolume`
   - `discoverRanking`
 - Default runtime config is now:
@@ -443,7 +545,7 @@
 - Added shared runtime path/config modules:
   - `src/runtime/runtime-data-paths.ts`
   - `src/runtime/runtime-config.ts`
-- `config.json` is now created automatically in `${SBOTIFY_DATA_DIR || ~/.sbotify}/config.json`
+- `config.json` is now created automatically in `${AGENTUNE_DATA_DIR || ~/.agentune}/config.json`
 - Runtime config currently supports:
   - `dashboardPort`
   - `daemonPort`
@@ -638,7 +740,7 @@
 ## 2026-03-17 (Singleton Daemon + Stdio Proxy)
 
 ### Daemon Architecture for Stateful Session Sharing
-- Added `src/daemon/pid-manager.ts` — Manage PID file at `~/.sbotify/daemon.pid` for inter-process discovery
+- Added `src/daemon/pid-manager.ts` — Manage PID file at `~/.agentune/daemon.pid` for inter-process discovery
 - Added `src/daemon/health-endpoint.ts` — `/health` HTTP endpoint for daemon readiness polling
 - Added `src/daemon/daemon-server.ts` — HTTP server on port 3747 with `/health`, `/mcp`, `/shutdown` routes
   - Mounts `StreamableHTTPServerTransport` from MCP SDK for stateful session management
@@ -646,8 +748,8 @@
   - Shares tool handlers with stdio transport (same singleton accessors)
 - Added `src/proxy/daemon-launcher.ts` — Auto-spawn detached daemon if not running; poll health endpoint for readiness
 - Added `src/proxy/stdio-proxy.ts` — Default proxy mode: stdio↔HTTP relay using MCP SDK client/server transports
-- Added `src/cli/status-command.ts` — `sbotify status` subcommand to print daemon info
-- Added `src/cli/stop-command.ts` — `sbotify stop` subcommand to POST `/shutdown` to daemon
+- Added `src/cli/status-command.ts` — `agentune status` subcommand to print daemon info
+- Added `src/cli/stop-command.ts` — `agentune stop` subcommand to POST `/shutdown` to daemon
 - Updated `src/index.ts` — CLI routing: `--daemon` mode, `status` subcommand, `stop` subcommand, default proxy mode
 - Updated `src/mcp/mcp-server.ts` — Extracted `registerMcpTools()` to share tool definitions between stdio and HTTP transports
 - Updated `docs/system-architecture.md` — New "Daemon Architecture" section with proxy pattern diagram and mode documentation
@@ -667,7 +769,7 @@
 - Build clean: `npm run build` produces dist/ with no errors
 
 ### Known Considerations
-- PID file at `~/.sbotify/daemon.pid` is single source of truth for proxy discovery
+- PID file at `~/.agentune/daemon.pid` is single source of truth for proxy discovery
 - Daemon port (3747) separate from web dashboard (3737) to avoid conflicts
 - Proxy is completely stateless; all logic in daemon singleton
 - Multiple proxies can connect to same daemon; state is shared (not isolated per-session)
@@ -844,7 +946,7 @@
 ### Phase 1+: SQLite History Foundation
 - Added `src/history/history-store.ts` with `HistoryStore` class backed by better-sqlite3; singleton pattern via `createHistoryStore()` and `getHistoryStore()`
 - Added `src/history/history-schema.ts` with SQLite table definitions (tracks, plays, preferences, session_state, lastfm_cache) and `normalizeTrackId()` for consistent track dedup
-- Database location: `~/.sbotify/history.db` (configurable via `SBOTIFY_DATA_DIR` env var); auto-created on first run with WAL mode for concurrent safety
+- Database location: `~/.agentune/history.db` (configurable via `AGENTUNE_DATA_DIR` env var); auto-created on first run with WAL mode for concurrent safety
 - Added MCP tool `history` to `src/mcp/mcp-server.ts` — enables agent to query recent plays with play counts and skip rates
 - Integrated history recording into `src/queue/queue-playback-controller.ts` — `recordPlay()` called when track starts, `updatePlay()` called on finish/skip
 - Updated `src/index.ts` to initialize history store on startup (non-fatal) and close DB gracefully on shutdown

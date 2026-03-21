@@ -2,7 +2,7 @@
 
 ## Overview
 
-`sbotify` is a single-user music control system built around one shared daemon per device.
+`agentune` is a single-user music control system built around one shared daemon per device.
 
 1. Coding agents connect through MCP.
 2. The daemon owns playback, queue state, listening history, and the browser dashboard.
@@ -11,7 +11,7 @@
 ```
 Agent / MCP Client
   -> stdio proxy or HTTP MCP client
-  -> sbotify daemon
+  -> agentune daemon
      -> MCP tools
      -> queue + playback controller
      -> taste engine
@@ -24,8 +24,8 @@ Agent / MCP Client
 
 ### Proxy Mode
 
-- `sbotify` without args starts the lightweight stdio proxy.
-- The proxy reads `autoStartDaemon` from `${SBOTIFY_DATA_DIR || ~/.sbotify}/config.json`.
+- `agentune` without args starts the lightweight stdio proxy.
+- The proxy reads `autoStartDaemon` from `${AGENTUNE_DATA_DIR || ~/.agentune}/config.json`.
 - If `autoStartDaemon` is `true`, the proxy auto-starts the daemon when needed.
 - If `autoStartDaemon` is `false`, the proxy only connects to an already-running daemon and fails fast with a manual-start hint if none exists.
 - The proxy does not own queue, mpv, or database state.
@@ -33,17 +33,20 @@ Agent / MCP Client
 
 ### Daemon Mode
 
-- `sbotify --daemon` starts the long-lived process.
-- `sbotify start` starts the same daemon in the background and exits after readiness succeeds.
-- Runtime config lives at `${SBOTIFY_DATA_DIR || ~/.sbotify}/config.json`.
+- `agentune --daemon` starts the long-lived process.
+- `agentune start` starts the same daemon in the background and exits after readiness succeeds.
+- Runtime config lives at `${AGENTUNE_DATA_DIR || ~/.agentune}/config.json`.
 - The daemon exposes:
   - `/mcp` on the configured daemon port for MCP traffic
   - `/health` for readiness checks
   - `/shutdown` for graceful stop
   - the dashboard on `http://127.0.0.1:{dashboardPort}` from config
+- The daemon PID file now stores `pid`, `port`, `started`, and a per-process control token.
+- `/mcp` and `/shutdown` require `X-Agentune-Daemon-Token`; `/health` stays unauthenticated so proxy discovery and `agentune status` can probe readiness without extra bootstrap.
 - Both ports are exact; no automatic fallback is used anymore.
 - One daemon means one shared queue, one shared history DB, and one shared `mpv` process.
-- The daemon stays alive until an explicit stop request arrives from `sbotify stop` or the dashboard stop button.
+- The daemon stays alive until an explicit stop request arrives from `agentune stop` or the dashboard stop button.
+- `agentune stop` waits for graceful shutdown first and only falls back to a verified process kill.
 
 ## Core Components
 
@@ -175,7 +178,9 @@ Behavior:
 Files:
 
 - `src/web/web-server.ts`
+- `src/web/web-server-auth.ts`
 - `src/web/web-server-artwork-proxy.ts`
+- `src/web/web-server-static-file-path.ts`
 - `src/web/state-broadcaster.ts`
 - `public/index.html`
 - `public/app.js`
@@ -214,15 +219,25 @@ Dashboard features:
 
 Important notes:
 
+- `GET /` serves the dashboard HTML dynamically and injects a per-process session token into a `<meta>` tag.
+- `GET` / `POST` `/api/*` require `X-Agentune-Dashboard-Token`.
+- `GET /api/artwork` and `WS /ws` require a `dashboardToken` query param because the browser bootstrap path cannot rely on custom headers for artwork/image requests.
+- Dashboard `POST` routes and `WS /ws` also require a same-origin browser request (`Origin` must match the dashboard host).
 - The dashboard no longer renders context badges.
 - `POST /api/persona` accepts only `taste`.
 - artwork theming reads proxied thumbnails instead of sampling remote image URLs directly.
+- Dashboard JSON body reads are size-bounded.
+- `POST /api/volume` rejects non-finite input and clamps accepted values into `0..100`.
+- WebSocket volume updates also reject non-finite input.
+- `/api/artwork` only proxies remote `http` / `https` image responses, blocks loopback/private/link-local targets, resolves hostnames before fetch, validates redirect targets, and caps proxied artwork size.
+- Static assets are resolved relative to the real `public/` root instead of relying on prefix string checks.
 - Persona changes are broadcast to connected clients over WebSocket.
 - Dashboard taste edits can arrive through WebSocket or `POST /api/persona`.
 - `GET /api/database/stats` returns both raw counts and a smaller `insights` block with `plays7d`, `tracks7d`, skip rate, 7-day activity, top artists, and top tags. The dashboard uses the 7-day insight metrics, while the lower advanced section still shows raw DB counts.
 - Cleanup actions stop playback, clear runtime queue state, invalidate discover cache, then mutate SQLite.
-- `POST /api/daemon/stop` returns success first, then schedules the same shutdown path used by `sbotify stop`.
-- After a dashboard stop, the page stops reconnecting until sbotify is started again.
+- Cleanup actions are serialized so overlapping destructive requests cannot run concurrently.
+- `POST /api/daemon/stop` returns success first, then schedules the same shutdown path used by `agentune stop`.
+- After a dashboard stop, the page stops reconnecting until agentune is started again.
 
 ## Main Flows
 
