@@ -2,7 +2,7 @@
 
 **Music Player for Agent.**
 
-agentune is a local MCP music player for Claude Code, Codex, and OpenCode. Your agent can discover tracks, play instantly, queue the next song, and keep one shared listening session running while you work.
+agentune is a local MCP music player for Claude Code, Codex, OpenCode, and other MCP-compatible coding agents. Your agent can discover tracks, play instantly, queue the next song, and keep one shared listening session running while you work.
 
 > CLI-only package: install and run `agentune` as a command. Programmatic `import "agentune"` is not a supported interface.
 
@@ -49,7 +49,9 @@ npm install -g agentune
 agentune --version
 ```
 
-### 2. Connect your agent
+### 2. Connect your MCP client
+
+Here are ready-to-use examples for common coding agents. Other MCP-compatible clients can point to the same local `agentune` command.
 
 #### Claude Code
 
@@ -98,27 +100,37 @@ Use `agentune start` when you want the background daemon running before your age
 
 ```text
 play some musics. id like Vietnamese song only, V-Pop, Indie, RAP, Ballad.
-play some musics.
 ```
 
-You can also ask for:
+Use that first prompt to define your taste/persona in plain language. The agent can save that preference and reuse it later.
+
+After that, a simple prompt is enough:
 
 ```text
-what song is playing now?
-skip this one.
-turn volume down to 60.
-pause the music.
-resume playback.
+Play some musics
 ```
+
+The agent should read your saved taste, recent listening history, top artists, and top keywords, then choose music that fits instead of starting from zero each time.
+
+If you want to change taste later, just say it naturally. For example:
+
+```text
+play some musics. i want more chill Vietnamese indie and fewer rap tracks tonight.
+```
+
+The agent can update the saved taste text, then continue using the new preference on later picks.
+
+> Tip: if your coding setup supports subagents, you can dedicate one subagent to keep the playlist going during the whole work session. In repos that use `CLAUDE.md` or `AGENTS.md`, you can also add a small instruction telling the agent to maintain playback, queue the next fitting track, and adapt when you describe a new taste.
 
 ## Main Capabilities
 
-- Let the agent discover music from your current taste and listening history
+- Save a simple free-text music taste/persona across sessions
+- Let the agent use saved taste, recent plays, top artists, and top keywords for future picks
 - Play a song immediately or add it to the queue
 - Pause, resume, skip, and adjust volume
 - Check what is playing right now
 - Review recent listening history
-- Update the taste/persona text the agent uses for future picks
+- Update the taste/persona text any time in plain language
 
 ## Browser Dashboard
 
