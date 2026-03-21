@@ -1,5 +1,39 @@
 # Project Changelog
 
+## 2026-03-21 (Ambient Background Theme Transition Smoothing)
+
+### Dashboard Background Motion
+- Smoothed dashboard ambient color changes on track switch in:
+  - `public/style.css`
+- Registered the artwork-driven background color tokens with `@property` so the gradient can interpolate instead of snapping when a new palette arrives.
+- Limited the motion change to the background color treatment only:
+  - artwork swap behavior stays unchanged
+  - title and metadata updates stay immediate
+
+### Validation
+- `npm run build`: passed
+
+## 2026-03-21 (Concurrent add_song Queue Race Fix)
+
+### Root Cause + Fix
+- Fixed a queue race where multiple `add_song` calls arriving at nearly the same time could all observe `nowPlaying === null`, then each independently drain one item from the queue and trigger competing playback starts.
+- The result was lost queue entries in practice: one later start would replace an earlier one, so several requested songs disappeared from the visible queue and never got a real turn.
+- Serialized playback and queue mutations in:
+  - `src/queue/queue-playback-controller.ts`
+- `addById()` now reuses the already-resolved audio for the same song when it is the track that should start from an idle queue, instead of re-resolving and racing a second queue drain.
+- Applied the same mutation lock to skip, replace-current, natural stop handling, and runtime reset so queue/playback state advances linearly.
+
+### Regression Coverage
+- Added concurrent queue coverage in:
+  - `src/queue/queue-playback-controller.test.ts`
+- Locked the bulk-add guarantee:
+  - 20 concurrent `addById()` calls keep exactly 1 track playing and 19 still queued
+  - only 1 playback start is issued for the idle-transition path
+
+### Validation
+- `npm run build`: passed
+- `npm test`: 109 passed, 0 failed
+
 ## 2026-03-21 (Queue Auto-Advance After Natural Track End)
 
 ### Root Cause + Fix

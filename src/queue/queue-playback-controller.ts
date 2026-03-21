@@ -7,6 +7,8 @@ import type { SearchResult } from '../providers/youtube-provider.js';
 import { getWebServer } from '../web/web-server.js';
 import type { QueueItem, QueueManager } from './queue-manager.js';
 
+type PlaybackMeta = { context?: string; canonicalArtist?: string; canonicalTitle?: string };
+
 function mapSearchResultToQueueItem(result: SearchResult): QueueItem {
   return {
     id: result.id,
@@ -22,6 +24,7 @@ export class QueuePlaybackController {
   private suppressStoppedHandler = false;
   private shuttingDown = false;
   private currentPlayId: number | null = null;
+  private playbackMutation = Promise.resolve();
   // Pre-fetched audio for the next queued track (keyed by video ID)
   private prefetchedAudio: { id: string; audio: AudioInfo } | null = null;
   private prefetchInProgress: string | null = null;
@@ -38,28 +41,36 @@ export class QueuePlaybackController {
 
   async playById(
     id: string,
-    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+    extraMeta?: PlaybackMeta,
   ): Promise<QueueItem> {
     const resolved = await this.resolveQueueItem(id, extraMeta);
-    this.startPlayback(resolved.item, resolved.audio, extraMeta);
-    return resolved.item;
+    return await this.withPlaybackMutation(async () => {
+      this.startPlayback(resolved.item, resolved.audio, extraMeta);
+      return resolved.item;
+    });
   }
 
   async addById(
     id: string,
-    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+    extraMeta?: PlaybackMeta,
   ): Promise<{ item: QueueItem; action: 'queued'; position: number; startedPlayback: boolean }> {
     const resolved = await this.resolveQueueItem(id, extraMeta);
-    const position = this.queueManager.add(resolved.item);
+    return await this.withPlaybackMutation(async () => {
+      const position = this.queueManager.add(resolved.item);
 
-    if (!this.queueManager.getNowPlaying()) {
-      await this.playNextQueuedTrack();
-      return { item: resolved.item, action: 'queued', position, startedPlayback: true };
-    }
+      if (!this.queueManager.getNowPlaying()) {
+        await this.playNextQueuedTrackLocked({
+          id: resolved.item.id,
+          audio: resolved.audio,
+          extraMeta,
+        });
+        return { item: resolved.item, action: 'queued', position, startedPlayback: true };
+      }
 
-    // If this is the next-up track, pre-fetch its audio
-    if (position === 1) this.prefetchNextTrack();
-    return { item: resolved.item, action: 'queued', position, startedPlayback: false };
+      // If this is the next-up track, pre-fetch its audio
+      if (position === 1) this.prefetchNextTrack();
+      return { item: resolved.item, action: 'queued', position, startedPlayback: false };
+    });
   }
 
   async queueByQuery(query: string): Promise<{ item: QueueItem; position: number }> {
@@ -74,41 +85,45 @@ export class QueuePlaybackController {
   }
 
   async skip(): Promise<QueueItem | null> {
-    // Record skip in history + taste feedback before stopping
-    if (this.currentPlayId !== null) {
-      try {
-        const store = getHistoryStore();
-        const nowPlaying = this.queueManager.getNowPlaying();
-        if (store) {
-          const position = await this.mpv.getPosition().catch(() => 0);
-          store.updatePlay(this.currentPlayId, { played_sec: Math.round(position), skipped: true });
+    return await this.withPlaybackMutation(async () => {
+      // Record skip in history + taste feedback before stopping
+      if (this.currentPlayId !== null) {
+        try {
+          const store = getHistoryStore();
+          const nowPlaying = this.queueManager.getNowPlaying();
+          if (store && nowPlaying) {
+            const position = await this.mpv.getPosition().catch(() => 0);
+            store.updatePlay(this.currentPlayId, { played_sec: Math.round(position), skipped: true });
+          }
+        } catch (err) {
+          console.error('[sbotify] Failed to record skip:', (err as Error).message);
         }
-      } catch (err) {
-        console.error('[sbotify] Failed to record skip:', (err as Error).message);
+        this.currentPlayId = null;
       }
-      this.currentPlayId = null;
-    }
 
-    if (this.queueManager.getNowPlaying()) {
-      this.queueManager.finishCurrentTrack();
-      this.suppressStoppedHandler = true;
-      this.mpv.stop();
-    }
+      if (this.queueManager.getNowPlaying()) {
+        this.queueManager.finishCurrentTrack();
+        this.suppressStoppedHandler = true;
+        this.mpv.stop();
+      }
 
-    return await this.playNextQueuedTrack();
+      return await this.playNextQueuedTrackLocked();
+    });
   }
 
   async stopAndResetRuntimeState(): Promise<void> {
-    this.prefetchedAudio = null;
-    this.prefetchInProgress = null;
-    await this.recordInterruptedPlay();
+    await this.withPlaybackMutation(async () => {
+      this.prefetchedAudio = null;
+      this.prefetchInProgress = null;
+      await this.recordInterruptedPlay();
 
-    if (this.mpv.isReady() && this.mpv.getCurrentTrack()) {
-      this.suppressStoppedHandler = true;
-      this.mpv.stop();
-    }
+      if (this.mpv.isReady() && this.mpv.getCurrentTrack()) {
+        this.suppressStoppedHandler = true;
+        this.mpv.stop();
+      }
 
-    this.queueManager.reset();
+      this.queueManager.reset();
+    });
   }
 
   listQueue(): QueueItem[] {
@@ -120,31 +135,33 @@ export class QueuePlaybackController {
   }
 
   private async handleStopped(): Promise<void> {
-    if (this.shuttingDown) {
-      return;
-    }
-
-    if (this.suppressStoppedHandler) {
-      this.suppressStoppedHandler = false;
-      return;
-    }
-
-    // Record natural finish in history + taste feedback
-    if (this.currentPlayId !== null) {
-      try {
-        const store = getHistoryStore();
-        const nowPlaying = this.queueManager.getNowPlaying();
-        if (store && nowPlaying) {
-          store.updatePlay(this.currentPlayId, { played_sec: nowPlaying.duration, skipped: false });
-        }
-      } catch (err) {
-        console.error('[sbotify] Failed to record finish:', (err as Error).message);
+    await this.withPlaybackMutation(async () => {
+      if (this.shuttingDown) {
+        return;
       }
-      this.currentPlayId = null;
-    }
 
-    this.queueManager.finishCurrentTrack();
-    await this.playNextQueuedTrack();
+      if (this.suppressStoppedHandler) {
+        this.suppressStoppedHandler = false;
+        return;
+      }
+
+      // Record natural finish in history + taste feedback
+      if (this.currentPlayId !== null) {
+        try {
+          const store = getHistoryStore();
+          const nowPlaying = this.queueManager.getNowPlaying();
+          if (store && nowPlaying) {
+            store.updatePlay(this.currentPlayId, { played_sec: nowPlaying.duration, skipped: false });
+          }
+        } catch (err) {
+          console.error('[sbotify] Failed to record finish:', (err as Error).message);
+        }
+        this.currentPlayId = null;
+      }
+
+      this.queueManager.finishCurrentTrack();
+      await this.playNextQueuedTrackLocked();
+    });
   }
 
   /** Fetch genre from Apple iTunes and update track tags (fire-and-forget). */
@@ -163,23 +180,33 @@ export class QueuePlaybackController {
     }
   }
 
-  private async playNextQueuedTrack(): Promise<QueueItem | null> {
+  private async playNextQueuedTrackLocked(
+    prefetched?: { id: string; audio: AudioInfo; extraMeta?: PlaybackMeta },
+  ): Promise<QueueItem | null> {
     const nextItem = this.queueManager.next();
     if (!nextItem) {
       this.queueManager.clearNowPlaying();
       return null;
     }
 
-    return await this.playById(nextItem.id, {
+    if (prefetched && prefetched.id === nextItem.id) {
+      this.startPlayback(nextItem, prefetched.audio, prefetched.extraMeta);
+      return nextItem;
+    }
+
+    const nextExtraMeta = {
       context: nextItem.context,
       canonicalArtist: nextItem.artist,
       canonicalTitle: nextItem.title,
-    });
+    };
+    const resolved = await this.resolveQueueItem(nextItem.id, nextExtraMeta);
+    this.startPlayback(resolved.item, resolved.audio, nextExtraMeta);
+    return resolved.item;
   }
 
   private async resolveQueueItem(
     id: string,
-    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+    extraMeta?: PlaybackMeta,
   ): Promise<{ item: QueueItem; audio: AudioInfo }> {
     // Use pre-fetched audio if available for this track
     let audio: AudioInfo;
@@ -247,7 +274,7 @@ export class QueuePlaybackController {
   private startPlayback(
     queueItem: QueueItem,
     audio: AudioInfo,
-    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+    extraMeta?: PlaybackMeta,
   ): void {
     // mpv keeps its pause property until explicitly cleared, so a paused track
     // followed by skip would otherwise load the next song in a paused state.
@@ -286,12 +313,30 @@ export class QueuePlaybackController {
 
   async replaceCurrentTrack(
     id: string,
-    extraMeta?: { context?: string; canonicalArtist?: string; canonicalTitle?: string },
+    extraMeta?: PlaybackMeta,
   ): Promise<QueueItem> {
-    await this.recordInterruptedPlay();
     const resolved = await this.resolveQueueItem(id, extraMeta);
-    this.startPlayback(resolved.item, resolved.audio, extraMeta);
-    return resolved.item;
+    return await this.withPlaybackMutation(async () => {
+      await this.recordInterruptedPlay();
+      this.startPlayback(resolved.item, resolved.audio, extraMeta);
+      return resolved.item;
+    });
+  }
+
+  private async withPlaybackMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.playbackMutation;
+    let release!: () => void;
+    this.playbackMutation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
+
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 }
 

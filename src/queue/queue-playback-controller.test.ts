@@ -80,6 +80,19 @@ class FakeYouTubeProvider {
   }
 }
 
+class SlowFakeYouTubeProvider extends FakeYouTubeProvider {
+  override async getAudioUrl(id: string): Promise<{
+    streamUrl: string;
+    title: string;
+    artist: string;
+    duration: number;
+    thumbnail: string;
+  }> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return await super.getAudioUrl(id);
+  }
+}
+
 test('QueuePlaybackController queues search results', async () => {
   const queueManager = new QueueManager();
   const controller = new QueuePlaybackController(
@@ -146,6 +159,32 @@ test('QueuePlaybackController addById queues when something is already playing',
   assert.equal(queueManager.getNowPlaying()?.id, 'current');
   assert.deepEqual(queueManager.list().map((item) => item.id), ['queued-song']);
   assert.equal(queueManager.list()[0].artist, 'Queued Artist');
+});
+
+test('QueuePlaybackController keeps every queued item when addById runs concurrently', async () => {
+  const queueManager = new QueueManager();
+  const fakeMpv = new FakeMpv();
+  const controller = new QueuePlaybackController(
+    fakeMpv as never,
+    queueManager,
+    new SlowFakeYouTubeProvider() as never,
+  );
+  const ids = Array.from({ length: 20 }, (_, index) => `song-${index + 1}`);
+
+  const added = await Promise.all(ids.map((id) => controller.addById(id, {
+    canonicalArtist: `Artist ${id}`,
+    canonicalTitle: `Title ${id}`,
+  })));
+
+  const state = queueManager.getState();
+  const actualIds = [state.nowPlaying?.id, ...state.queue.map((item) => item.id)]
+    .filter((id): id is string => Boolean(id))
+    .sort();
+
+  assert.equal(fakeMpv.playCalls.length, 1);
+  assert.equal(added.filter((result) => result.startedPlayback).length, 1);
+  assert.equal(state.queue.length, ids.length - 1);
+  assert.deepEqual(actualIds, [...ids].sort());
 });
 
 test('QueuePlaybackController replaceCurrentTrack plays new track immediately', async () => {

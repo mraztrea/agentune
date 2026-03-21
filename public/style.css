@@ -3,6 +3,30 @@
   box-sizing: border-box;
 }
 
+@property --ambient-start {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(18, 28, 44, 0.96);
+}
+
+@property --ambient-mid {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(26, 44, 70, 0.72);
+}
+
+@property --ambient-end {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(5, 8, 14, 0.98);
+}
+
+@property --accent-soft {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(173, 198, 255, 0.18);
+}
+
 :root {
   --bg-base: #000;
   --ink: #fff;
@@ -32,6 +56,7 @@
   --pause-bg-saturate: 0.4;
   --pause-bg-brightness: 0.9;
   --pause-icon-scale: 1.15;
+  --bg-theme-duration: 360ms;
 }
 
 body {
@@ -59,6 +84,10 @@ textarea {
     linear-gradient(180deg, var(--ambient-start) 0%, var(--ambient-mid) 48%, var(--ambient-end) 100%);
   filter: grayscale(0) saturate(1) brightness(1);
   transition:
+    --ambient-start var(--bg-theme-duration) ease,
+    --ambient-mid var(--bg-theme-duration) ease,
+    --ambient-end var(--bg-theme-duration) ease,
+    --accent-soft var(--bg-theme-duration) ease,
     opacity var(--pause-visual-duration) ease,
     filter var(--pause-visual-duration) ease;
 }
@@ -72,6 +101,7 @@ textarea {
     linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.28) 100%);
   opacity: 1;
   transition:
+    --accent-soft var(--bg-theme-duration) ease,
     opacity var(--pause-visual-duration) ease,
     filter var(--pause-visual-duration) ease;
 }
