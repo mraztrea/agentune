@@ -3,6 +3,7 @@
 // agentune — MCP music server entry point
 // Bootstraps MCP server, audio engine, and web dashboard
 
+import { readFileSync } from 'node:fs';
 import { createMpvController, getMpvController, waitForMpvStartupWarmup } from './audio/mpv-controller.js';
 import { createYoutubeProvider } from './providers/youtube-provider.js';
 import { createWebServer, getWebServer } from './web/web-server.js';
@@ -128,18 +129,58 @@ async function runShutdownStep(step: string, action: () => Promise<void> | void)
 // --- Entry point ---
 
 const args = process.argv.slice(2);
+const firstArg = args[0];
 
-if (args.includes('--daemon')) {
+if (firstArg === '--help' || firstArg === '-h' || firstArg === 'help') {
+  printCliHelp();
+} else if (firstArg === '--version' || firstArg === '-v' || firstArg === 'version') {
+  printCliVersion();
+} else if (args.includes('--daemon')) {
   startDaemon().catch((err) => { console.error('[agentune] Fatal:', err); process.exit(1); });
-} else if (args[0] === 'status') {
+} else if (firstArg === 'status') {
   import('./cli/status-command.js').then(({ runStatus }) => runStatus());
-} else if (args[0] === 'start') {
+} else if (firstArg === 'start') {
   import('./cli/start-command.js').then(({ runStart }) => runStart());
-} else if (args[0] === 'stop') {
+} else if (firstArg === 'stop') {
   import('./cli/stop-command.js').then(({ runStop }) => runStop());
 } else {
   // Default: proxy mode — relay stdio↔HTTP and optionally auto-start daemon.
   startProxyMode().catch((err) => { console.error('[agentune] Fatal:', err); process.exit(1); });
+}
+
+function printCliHelp(): void {
+  const metadata = readPackageMetadata();
+  process.stdout.write(
+    [
+      'agentune',
+      metadata.description,
+      '',
+      'Usage:',
+      '  agentune                 Start MCP stdio proxy mode',
+      '  agentune start           Start the daemon in the background',
+      '  agentune stop            Stop the running daemon',
+      '  agentune status          Show daemon status',
+      '  agentune version         Print CLI version',
+      '  agentune --help          Show this help',
+      '  agentune --version       Print CLI version',
+      '',
+      'Notes:',
+      '  - The dashboard is served from the configured dashboard port after the daemon is ready.',
+      '  - In normal MCP use, your client launches `agentune` automatically.',
+      '',
+    ].join('\n'),
+  );
+}
+
+function printCliVersion(): void {
+  process.stdout.write(`${readPackageMetadata().version}\n`);
+}
+
+function readPackageMetadata(): { description: string; version: string } {
+  return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    description: string;
+    version: string;
+  };
 }
 
 async function startProxyMode() {

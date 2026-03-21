@@ -1,7 +1,7 @@
 {
   "name": "agentune",
-  "version": "0.1.1-alpha.1",
-  "description": "MCP music server — let your coding agent be your DJ",
+  "version": "0.1.1-alpha.2",
+  "description": "Music Player for Agent",
   "type": "module",
   "bin": {
     "agentune": "dist/index.js"

@@ -1,5 +1,27 @@
 # Project Changelog
 
+## 2026-03-21 (CLI Help and Version Flags)
+
+### CLI
+- Added root CLI metadata commands in `src/index.ts`:
+  - `agentune --version`
+  - `agentune -v`
+  - `agentune version`
+  - `agentune --help`
+  - `agentune -h`
+  - `agentune help`
+- These commands now exit immediately instead of falling through to MCP proxy mode.
+- `--help` prints a short usage summary for proxy mode and daemon subcommands.
+- `--version` reads the package version from `package.json` so installed CLI version is easy to verify.
+
+### Tests
+- Added `src/cli/meta-command.test.ts` to execute the compiled CLI and verify:
+  - `agentune --version` prints the package version
+  - `agentune --help` prints usage and exits cleanly
+
+### Documentation
+- Updated `README.md` quick start to mention `agentune --version` and `agentune --help`.
+
 ## 2026-03-21 (CLI-Only Publish Standardization)
 
 ### Release Workflow

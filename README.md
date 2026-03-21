@@ -1,130 +1,147 @@
 # agentune
 
-**MCP music server — let your coding agent be your DJ.**
+**Music Player for Agent.**
 
-agentune is a Model Context Protocol (MCP) server that enables coding agents (Claude Code, Cursor, Codex) to control music playback like a professional DJ. Discover tracks from your current taste state, play songs immediately, add songs to the queue, and keep a shared listening session moving — all through natural language while your agent writes code.
+agentune is a local MCP music player for Claude Code, Codex, and OpenCode. Your agent can discover tracks, play instantly, queue the next song, and keep one shared listening session running while you work.
 
-> CLI-only package: install and run `agentune` as a command. Programmatic `import 'agentune'` is not a supported interface.
+> CLI-only package: install and run `agentune` as a command. Programmatic `import "agentune"` is not a supported interface.
 
-## Features
+## Why agentune
 
-- **Agent-driven music control**: Taste-aware `discover -> play_song/add_song -> feedback` flow via MCP
-- **Apple-only discover pipeline**: flat, paginated Apple candidates with optional `artist` / `keywords` seeds
-- **Browser dashboard**: Real-time now-playing info, lightweight listening insights from SQLite, manual database cleanup, and an explicit daemon stop button on the configured dashboard port
-- **Headless playback**: Audio plays independently via mpv (no browser needed)
-- **Cross-platform**: Works on Windows, macOS, Linux
-- **Zero-key resolver**: Apple Search API for canonical catalog lookup, yt-dlp for playback resolution
+- **Zero-auth setup**: no Spotify login, no Apple Music login, no API keys
+- **Background play**: audio runs through `mpv`, not a browser tab
+- **Auto start**: the daemon can start itself when your agent connects
+- **Shared session**: queue, history, taste state, and dashboard stay in one local daemon
+- **Browser dashboard**: live now-playing, queue, volume, taste, and listening insights
+- **Cross-platform**: works on Windows, macOS, and Linux
 
-## Quick Start
-
-### Prerequisites
+## Prerequisites
 
 - Node.js 20+
-- mpv (audio engine)
-- yt-dlp (audio extraction)
+- `mpv`
+- `yt-dlp`
 
-**macOS:**
+### macOS
+
 ```bash
 brew install mpv yt-dlp
-npm install -g agentune
 ```
 
-**Ubuntu/Debian:**
+### Ubuntu / Debian
+
 ```bash
 sudo apt-get install mpv python3-pip
 pip install yt-dlp
-npm install -g agentune
 ```
 
-**Windows:**
+### Windows
+
 ```bash
-# Install via scoop or download binaries
 scoop install mpv yt-dlp
+```
+
+## Quick Start
+
+### 1. Install agentune
+
+```bash
 npm install -g agentune
+agentune --version
 ```
 
-For prerelease testing from npm, install the alpha channel explicitly:
+### 2. Connect your agent
+
+#### Claude Code
 
 ```bash
-npm install -g agentune@alpha
+claude mcp add agentune --scope user -- agentune
 ```
 
-### Start the Server
+#### Codex
 
 ```bash
-agentune
-# Listens on stdio for MCP (agent) + HTTP on the configured dashboard port (default: localhost:3737)
+codex mcp add agentune -- agentune
 ```
 
-Control the daemon explicitly when needed:
+#### OpenCode
 
-```bash
-agentune start
-agentune stop
-```
-
-### MCP Configuration (Claude Code)
-
-Add to your `Claude.md` or claude config:
+Add this to `opencode.json`:
 
 ```json
 {
-  "mcpServers": {
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
     "agentune": {
-      "command": "agentune",
-      "args": [],
-      "disabled": false
+      "type": "local",
+      "command": ["agentune"],
+      "enabled": true
     }
   }
 }
 ```
 
-Then ask Claude Code:
-> "Call get_session_state, discover page 1 for ambient, then add one track to the queue"
-> "Play Blinding Lights by The Weeknd right now"
-> "What song is playing?"
-> "Skip to the next track"
-> "Update persona taste to warm piano, ambient, and patient Vietnamese ballads"
+### 3. Start your coding session
 
-Current `discover` contract:
-- `get_session_state()` returns time context, `persona.Preferences`, recent plays, top artists, and top keywords.
-- `discover(page?, limit?, artist?, keywords?)` returns a flat page of Apple candidates plus `nextGuide`.
-- `discover(page=2)` continues the same cached snapshot when more results exist.
-- Legacy `mode` and `intent` params are still accepted for compatibility, but ignored.
-- Agent should follow `nextGuide`: either keep the same input and change page, or improve `artist` / `keywords`.
-- Discover ranking uses fixed config values from `config.json`, not agent-editable persona traits.
+Your MCP client launches `agentune` automatically. The dashboard is available at `http://localhost:3737` after the first connection.
 
-### Browser Dashboard
+Useful daemon commands:
 
-Open the configured dashboard URL (default `http://localhost:3737`) in your browser to see:
-- Now-playing track (title, artist, progress)
-- Pause/resume + next playback controls
-- Volume slider
-- Live queue preview
-- Minimal listening insights (curved 7-day line chart, 7-day plays/tracks, top artists, top tags)
-- Persona taste editor
-- Database stats + manual cleanup actions
-- Explicit `Stop daemon` control
-
-### Runtime Config
-
-On first run, agentune creates `${AGENTUNE_DATA_DIR || ~/.agentune}/config.json`:
-
-```json
-{
-  "dashboardPort": 3737,
-  "daemonPort": 3747,
-  "defaultVolume": 80,
-  "autoStartDaemon": true,
-  "discoverRanking": {
-    "exploration": 0.35,
-    "variety": 0.55,
-    "loyalty": 0.65
-  }
-}
+```bash
+agentune --help
+agentune start
+agentune stop
 ```
 
-Both ports are exact. If either port is already in use, startup fails instead of falling back to another port. `defaultVolume` sets the initial mpv volume on daemon startup, `autoStartDaemon` controls whether `agentune` auto-spawns the daemon when a coding session connects, and `discoverRanking` provides the fixed reranking weights used by `discover()`.
+Use `agentune start` when you want the background daemon running before your agent connects, or when `autoStartDaemon` is disabled.
+
+### 4. Send your first prompts
+
+```text
+play some musics. id like Vietnamese song only, V-Pop, Indie, RAP, Ballad.
+play some musics.
+```
+
+You can also ask for:
+
+```text
+what song is playing now?
+skip this one.
+turn volume down to 60.
+pause the music.
+resume playback.
+```
+
+## Main Capabilities
+
+- Let the agent discover music from your current taste and listening history
+- Play a song immediately or add it to the queue
+- Pause, resume, skip, and adjust volume
+- Check what is playing right now
+- Review recent listening history
+- Update the taste/persona text the agent uses for future picks
+
+## Browser Dashboard
+
+Open `http://localhost:3737` to see:
+
+- now-playing track and progress
+- pause/resume and next controls
+- volume slider
+- live queue
+- listening insights from local history
+- taste editor
+- cleanup actions and explicit daemon stop
+
+## Runtime Notes
+
+On first run, agentune creates `${AGENTUNE_DATA_DIR || ~/.agentune}/config.json`.
+
+Most useful settings:
+
+- `dashboardPort`: browser dashboard port, default `3737`
+- `daemonPort`: local daemon port, default `3747`
+- `defaultVolume`: initial playback volume
+- `autoStartDaemon`: automatically start the daemon when your agent connects
 
 If `autoStartDaemon` is `false`, start the daemon yourself before connecting:
 
@@ -132,114 +149,14 @@ If `autoStartDaemon` is `false`, start the daemon yourself before connecting:
 agentune start
 ```
 
-The daemon stays alive after the coding session closes. It stops only when you run `agentune stop` or click `Stop daemon` in the dashboard.
+The daemon keeps playing in the background after the agent session closes. It stops only when you run `agentune stop` or click `Stop daemon` in the dashboard.
 
-## Architecture Overview
+## More Docs
 
-```
-Coding Agent (Claude Code/Cursor)
-    │ stdio (MCP Protocol)
-    ▼
-┌─────────────────────────────────────┐
-│    agentune MCP Server (Node.js)    │
-├─────────────────────────────────────┤
-│  • MCP Tool Definitions (Phase 2)   │
-│  • mpv Audio Engine (Phase 3)       │
-│  • Apple-first Resolver (Phase 4)   │
-│  • Queue Manager (Phase 7)          │
-└─────────────────────────────────────┘
-    │                              │
-    │ JSON IPC pipes/sockets       │ HTTP + WebSocket
-    ▼                              ▼
-   mpv (headless)            Browser Dashboard
-   (audio playback)          (configured dashboard port)
-```
-
-## Key Design Principles
-
-1. **Never console.log()** — corrupts MCP stdio protocol. Use `console.error()` for debug.
-2. **IPC Protocol**: Named pipes on Windows (`\\.\pipe\agentune-mpv`), Unix sockets on Unix (`/tmp/agentune-mpv`)
-3. **Error Handling**: Return `{isError: true, message: "..."}` instead of throwing
-4. **Stream URLs**: YouTube streams expire after ~6 hours; always fetch fresh
-
-## Documentation
-
-- **[Project Overview & PDR](./docs/project-overview-pdr.md)** — Goals, MVP scope, target users
-- **[Codebase Summary](./docs/codebase-summary.md)** — Directory structure, module responsibilities
-- **[Code Standards](./docs/code-standards.md)** — TypeScript conventions, ESM rules, naming patterns
-- **[System Architecture](./docs/system-architecture.md)** — Component interactions, IPC protocol details
-- **[Project Roadmap](./docs/project-roadmap.md)** — Phase timeline, milestones, progress
-- **[Project Changelog](./docs/project-changelog.md)** — Significant implementation changes and validation notes
-
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Watch TypeScript compilation
-npm run dev
-
-# Build
-npm run build
-
-# Start locally
-npm start
-```
-
-## Release
-
-`agentune` uses a local-gated release flow. Do not publish it with raw `npm publish`.
-
-```bash
-# One-time auth
-npm login
-
-# Verify package metadata, tarball contents, and install smoke
-npm run verify:publish
-
-# Publish an alpha prerelease to dist-tag "alpha"
-npm run release:alpha -- --bump prerelease
-
-# Publish a stable release from main to dist-tag "latest"
-npm run release:stable -- --bump patch
-```
-
-- Alpha releases publish SemVer prereleases such as `0.2.0-alpha.1` to `alpha`.
-- Stable releases publish normal SemVer versions such as `0.2.0` to `latest`.
-- The release scripts enforce clean git state, remote sync, build/test gates, tarball smoke checks, and npm dist-tag selection.
-
-## Phase Timeline
-
-| Phase | Focus | Status |
-|-------|-------|--------|
-| 1 | Project setup | ✓ Complete |
-| 2 | MCP server + tool definitions | ✓ Complete |
-| 3 | Audio engine (mpv) | ✓ Complete |
-| 4 | YouTube provider | ✓ Complete |
-| 5 | Browser dashboard | ✓ Complete |
-| 6 | Mood mode | ✓ Complete |
-| 7 | Queue + polish + release prep | ✓ Complete |
-
-See [Project Roadmap](./docs/project-roadmap.md) for detailed timelines and dependencies.
-
-## Success Criteria
-
-- Agent can discover, play, queue, skip, and continue songs **without human intervention**
-- Browser dashboard displays now-playing, listening insights, and volume control
-- Audio plays **independently** (mpv headless mode)
-- **< 3 seconds** from "play" command to audio output
-- Works on **Windows, macOS, Linux**
-- **npm install -g agentune** prepared (publish intentionally deferred)
-
-## Contributing
-
-See [Code Standards](./docs/code-standards.md) for contribution guidelines, TypeScript conventions, and code review process.
+- [Project overview](./docs/project-overview-pdr.md)
+- [System architecture](./docs/system-architecture.md)
+- [Codebase summary](./docs/codebase-summary.md)
 
 ## License
 
 MIT
-
-## Questions?
-
-See [Codebase Summary](./docs/codebase-summary.md) for architecture details or [System Architecture](./docs/system-architecture.md) for protocol specifications.
