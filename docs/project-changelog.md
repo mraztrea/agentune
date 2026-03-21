@@ -1,5 +1,37 @@
 # Project Changelog
 
+## 2026-03-21 (Resolver Original-Only Hard Blocking)
+
+### Resolver Filtering
+- Tightened YouTube resolver candidate filtering in:
+  - `src/providers/search-result-scorer.ts`
+  - `src/providers/search-result-scorer.test.ts`
+  - `src/mcp/song-resolver.test.ts`
+- The resolver now removes obvious non-original variants before scoring instead of only applying soft penalties.
+- Hard-blocked variants now include common alternate-version keywords such as:
+  - `cover`
+  - `karaoke`
+  - `instrumental`
+  - `acoustic`
+  - `piano`
+  - `tribute`
+  - `remake`
+  - `fanmade`
+  - `slowed`
+  - `sped up`
+  - `nightcore`
+  - `8d`
+  - `reverb`
+  - `live`
+  - `remix`
+  - `teaser`
+  - `preview`
+  - `shorts`
+  - `playlist`
+  - `full album`
+- Matching now checks both result titles and channel names using normalized token/phrase boundaries instead of loose substring checks.
+- Explicit user queries like `cover` or `live` still allow those variants through when the keyword is part of the requested song input.
+
 ## 2026-03-21 (Default Artwork Flicker Fix)
 
 ### Root Cause + Fix
