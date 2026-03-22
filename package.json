@@ -1,6 +1,6 @@
 {
   "name": "agentune",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Music Player for Agent",
   "type": "module",
   "bin": {
