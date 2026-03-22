@@ -10,6 +10,9 @@ const REPOSITORY_URL = 'git+https://github.com/tqdat410/agentune.git';
 const HOMEPAGE_URL = 'https://github.com/tqdat410/agentune#readme';
 const BUGS_URL = 'https://github.com/tqdat410/agentune/issues';
 const ALLOWED_ROOT_FILES = new Set(['README.md', 'LICENSE', 'package.json']);
+const ALLOWED_INSTALL_DEPRECATION_WARNINGS = [
+  /npm warn deprecated prebuild-install@/iu,
+];
 
 function validateMetadata(pkg) {
   ensure(pkg.name === PACKAGE_NAME, `package.json name must be "${PACKAGE_NAME}".`);
@@ -63,7 +66,18 @@ function verifyInstalledTarball(tarballPath) {
 
   try {
     run(NPM, ['init', '-y'], { cwd: installDir });
-    run(NPM, ['install', tarballPath], { cwd: installDir });
+    const installResult = runResult(NPM, ['install', tarballPath], { cwd: installDir });
+    const installOutput = `${installResult.stdout ?? ''}\n${installResult.stderr ?? ''}`.trim();
+
+    if (installOutput) {
+      console.error(installOutput);
+    }
+
+    ensure(
+      installResult.status === 0,
+      `Tarball install failed:\n${installOutput || '(no output)'}`,
+    );
+    assertExpectedInstallWarningsOnly(installOutput);
 
     const env = { AGENTUNE_DATA_DIR: dataDir };
     const installedEntry = path.join(installDir, 'node_modules', PACKAGE_NAME, BIN_PATH);
@@ -97,6 +111,22 @@ function verifyInstalledTarball(tarballPath) {
   } finally {
     removeDir(tempRoot);
   }
+}
+
+function assertExpectedInstallWarningsOnly(output) {
+  const deprecationWarnings = output
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => /^npm warn deprecated /iu.test(line));
+
+  const unexpectedWarnings = deprecationWarnings.filter((line) => {
+    return !ALLOWED_INSTALL_DEPRECATION_WARNINGS.some((pattern) => pattern.test(line));
+  });
+
+  ensure(
+    unexpectedWarnings.length === 0,
+    `Unexpected install deprecation warnings:\n${unexpectedWarnings.join('\n')}`,
+  );
 }
 
 console.error('[agentune] Verifying publish metadata...');
