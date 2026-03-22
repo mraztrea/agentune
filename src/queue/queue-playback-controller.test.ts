@@ -32,6 +32,8 @@ class FakeMpv extends EventEmitter {
     this.isPlaying = false;
   }
 
+  suppressNextStopped(): void { /* no-op in test fake */ }
+
   emitStopped(): void {
     this.isPlaying = false;
     this.emit('stopped');

@@ -27,6 +27,9 @@ export class MpvController extends EventEmitter {
   private pendingStoppedEvent = false;
   private session: MpvProcessSession | null = null;
   private readonly state: MpvState;
+  // Count of idle-active events to silently discard (set via suppressNextStopped).
+  // Prevents stale stop-originated events from corrupting the active track state.
+  private suppressStoppedCount = 0;
 
   constructor(initialVolume = 80) {
     super();
@@ -142,6 +145,11 @@ export class MpvController extends EventEmitter {
     }
   }
 
+  /** Tell the controller to silently discard the next N idle-active stopped events. */
+  suppressNextStopped(): void {
+    this.suppressStoppedCount++;
+  }
+
   getCurrentTrack(): TrackMeta | null { return this.state.currentTrack; }
 
   getIsPlaying(): boolean { return this.state.isPlaying; }
@@ -154,6 +162,7 @@ export class MpvController extends EventEmitter {
     this.session = null;
     this.initialized = false;
     this.pendingStoppedEvent = false;
+    this.suppressStoppedCount = 0;
     this.state.currentTrack = null;
     this.state.isMuted = false;
     this.state.isPlaying = false;
@@ -205,6 +214,7 @@ export class MpvController extends EventEmitter {
     this.session = null;
     this.initialized = false;
     this.pendingStoppedEvent = false;
+    this.suppressStoppedCount = 0;
     this.state.currentTrack = null;
     this.state.isPlaying = false;
     this.emitStateChange();
@@ -212,6 +222,14 @@ export class MpvController extends EventEmitter {
   }
 
   private handleStoppedEvent(): void {
+    // Discard stale idle-active events from a previous stop() that was
+    // followed by a new play() before mpv processed the stop IPC command.
+    if (this.suppressStoppedCount > 0) {
+      this.suppressStoppedCount--;
+      this.pendingStoppedEvent = false;
+      return;
+    }
+
     if (!this.pendingStoppedEvent && !this.state.currentTrack) return;
 
     this.pendingStoppedEvent = false;

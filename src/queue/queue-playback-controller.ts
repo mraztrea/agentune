@@ -21,7 +21,6 @@ function mapSearchResultToQueueItem(result: SearchResult): QueueItem {
 }
 
 export class QueuePlaybackController {
-  private suppressStoppedHandler = false;
   private shuttingDown = false;
   private currentPlayId: number | null = null;
   private playbackMutation = Promise.resolve();
@@ -103,7 +102,7 @@ export class QueuePlaybackController {
 
       if (this.queueManager.getNowPlaying()) {
         this.queueManager.finishCurrentTrack();
-        this.suppressStoppedHandler = true;
+        this.mpv.suppressNextStopped();
         this.mpv.stop();
       }
 
@@ -118,7 +117,7 @@ export class QueuePlaybackController {
       await this.recordInterruptedPlay();
 
       if (this.mpv.isReady() && this.mpv.getCurrentTrack()) {
-        this.suppressStoppedHandler = true;
+        this.mpv.suppressNextStopped();
         this.mpv.stop();
       }
 
@@ -137,11 +136,6 @@ export class QueuePlaybackController {
   private async handleStopped(): Promise<void> {
     await this.withPlaybackMutation(async () => {
       if (this.shuttingDown) {
-        return;
-      }
-
-      if (this.suppressStoppedHandler) {
-        this.suppressStoppedHandler = false;
         return;
       }
 

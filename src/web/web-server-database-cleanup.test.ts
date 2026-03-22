@@ -20,6 +20,7 @@ class CleanupFakeMpv extends EventEmitter {
     isMuted: false,
     volume: 80,
   };
+  private suppressStoppedCount = 0;
   stopCount = 0;
 
   setCurrentTrack(track: { title: string; artist: string; duration: number; thumbnail: string } | null): void {
@@ -39,11 +40,19 @@ class CleanupFakeMpv extends EventEmitter {
     return this.state.currentTrack;
   }
 
+  suppressNextStopped(): void {
+    this.suppressStoppedCount++;
+  }
+
   stop(): void {
     this.stopCount += 1;
     this.state.currentTrack = null;
     this.state.isPlaying = false;
-    this.emit('stopped');
+    if (this.suppressStoppedCount > 0) {
+      this.suppressStoppedCount--;
+    } else {
+      this.emit('stopped');
+    }
     this.emit('state-change', this.state);
   }
 

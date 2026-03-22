@@ -19,6 +19,7 @@ class PlaybackControlsFakeMpv extends EventEmitter {
   pauseCount = 0;
   playCount = 0;
   private pauseProperty = false;
+  private suppressStoppedCount = 0;
   resumeCount = 0;
   stopCount = 0;
 
@@ -70,11 +71,19 @@ class PlaybackControlsFakeMpv extends EventEmitter {
     this.emit('state-change', this.state);
   }
 
+  suppressNextStopped(): void {
+    this.suppressStoppedCount++;
+  }
+
   stop(): void {
     this.stopCount += 1;
     this.state.currentTrack = null;
     this.state.isPlaying = false;
-    this.emit('stopped');
+    if (this.suppressStoppedCount > 0) {
+      this.suppressStoppedCount--;
+    } else {
+      this.emit('stopped');
+    }
     this.emit('state-change', this.state);
   }
 
