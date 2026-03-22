@@ -73,6 +73,8 @@ jobs:
         run: npm run verify:publish
 
       - name: Run doctor diagnostics
+        if: always()
+        continue-on-error: true
         env:
           AGENTUNE_DATA_DIR: ${{ runner.temp }}/agentune-data
         timeout-minutes: 2
