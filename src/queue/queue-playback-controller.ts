@@ -27,6 +27,10 @@ export class QueuePlaybackController {
   // Pre-fetched audio for the next queued track (keyed by video ID)
   private prefetchedAudio: { id: string; audio: AudioInfo } | null = null;
   private prefetchInProgress: string | null = null;
+  // Monotonic counter incremented by operations that explicitly take over
+  // playback transitions (skip, stop-reset, replace).  A stale handleStopped
+  // callback whose captured generation doesn't match is silently discarded.
+  private playGeneration = 0;
 
   constructor(
     private readonly mpv: MpvController,
@@ -34,7 +38,8 @@ export class QueuePlaybackController {
     private readonly youtubeProvider: YouTubeProvider,
   ) {
     this.mpv.on('stopped', () => {
-      void this.handleStopped();
+      const gen = this.playGeneration;
+      void this.handleStopped(gen);
     });
   }
 
@@ -100,8 +105,21 @@ export class QueuePlaybackController {
         this.currentPlayId = null;
       }
 
+      // Bump generation AFTER the getPosition() await above so that any
+      // 'stopped' event captured during that yield carries the OLD generation
+      // and will be discarded when it finally enters the mutex.
+      this.playGeneration++;
+
       if (this.queueManager.getNowPlaying()) {
         this.queueManager.finishCurrentTrack();
+      }
+      // Guard suppress+stop on mpv state (not queue state) to prevent an
+      // orphaned suppressStoppedCount when an idle-active event fires during
+      // the `await getPosition()` above, clearing mpv.currentTrack before we
+      // reach this point.  Without this guard, stop() early-returns but the
+      // counter is already incremented, swallowing the *next* track's natural
+      // finish event and freezing auto-advance.
+      if (this.mpv.getCurrentTrack()) {
         this.mpv.suppressNextStopped();
         this.mpv.stop();
       }
@@ -112,6 +130,7 @@ export class QueuePlaybackController {
 
   async stopAndResetRuntimeState(): Promise<void> {
     await this.withPlaybackMutation(async () => {
+      this.playGeneration++;
       this.prefetchedAudio = null;
       this.prefetchInProgress = null;
       await this.recordInterruptedPlay();
@@ -133,9 +152,15 @@ export class QueuePlaybackController {
     this.shuttingDown = true;
   }
 
-  private async handleStopped(): Promise<void> {
+  private async handleStopped(generation: number): Promise<void> {
     await this.withPlaybackMutation(async () => {
       if (this.shuttingDown) {
+        return;
+      }
+
+      // If another operation (skip, replace, stop-reset) already took over
+      // the playback transition, this callback is stale — discard it.
+      if (generation !== this.playGeneration) {
         return;
       }
 
@@ -311,6 +336,7 @@ export class QueuePlaybackController {
   ): Promise<QueueItem> {
     const resolved = await this.resolveQueueItem(id, extraMeta);
     return await this.withPlaybackMutation(async () => {
+      this.playGeneration++;
       await this.recordInterruptedPlay();
       this.startPlayback(resolved.item, resolved.audio, extraMeta);
       return resolved.item;
